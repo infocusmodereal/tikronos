@@ -1,3 +1,3 @@
-module github.com/infocusmodereal/conditionally-awkward
+module github.com/infocusmodereal/tikronos
 
 go 1.23.2

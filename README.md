@@ -1,13 +1,13 @@
-# Conditionally Awkward
+# TiKronos
 
-A DynamoDB-compatible API for TiKV, starting with conditional writes for state locking.
+TiKronos aims to let applications use the DynamoDB API with TiKV as their storage engine. Its first compatibility target is conditional writes for state locking.
 
 ## Run locally
 
 With Go 1.23.2 or later:
 
 ```sh
-go run ./cmd/conditionally-awkward
+go run ./cmd/tikronos
 ```
 
 Run `curl http://127.0.0.1:8000/healthz` to check the HTTP process. This initial scaffold returns HTTP 501 for DynamoDB requests. TiKV storage and locking are planned.
