@@ -41,7 +41,8 @@ internal class TtlWorker(private val db: Storage, private val ttl: Ttl) {
             val config = tx.read(TtlRecords.config(candidate.tableId))?.let(TtlRecords::state)
             if (table?.id == candidate.tableId && config?.enabled == true &&
                 config.generation == candidate.generation) {
-                val item = tx.read(table.address(candidate.key))?.let(Records::item)
+                val itemAddress = table.address(candidate.key)
+                val item = tx.read(itemAddress)?.let { Records.itemAt(table, itemAddress, it) }
                 val expiry = item?.let { Ttl.expiration(it, config.attribute, now) }
                 if (expiry == candidate.expiry && expiry <= now)
                     writer.change(tx, table, candidate.key, ttl = true) { null }
@@ -61,7 +62,8 @@ internal class TtlWorker(private val db: Storage, private val ttl: Ttl) {
             val current = tx.read(TtlRecords.config(table.id))?.let(TtlRecords::state)
             if (live?.id == table.id && current == state) {
                 for (row in rows) {
-                    val item = tx.read(row.key.toStringUtf8())?.let(Records::item)
+                    val address = row.key.toStringUtf8()
+                    val item = tx.read(address)?.let { Records.itemAt(table, address, it) }
                     ttl.track(tx, table, null, item)
                 }
                 val next = if (rows.size < BATCH_SIZE) null else rows.last().key.toStringUtf8()

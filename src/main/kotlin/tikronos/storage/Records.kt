@@ -28,6 +28,13 @@ internal object Records {
         }
     }
 
+    fun itemAt(table: Table, address: String, bytes: ByteArray): Item {
+        val item = item(bytes)
+        val key = table.key(item, exact = false)
+        check(table.address(key) == address) { "Stored item primary key does not match its address" }
+        return item
+    }
+
     fun encodeTable(table: Table): ByteArray {
         val record =
             mapOf(

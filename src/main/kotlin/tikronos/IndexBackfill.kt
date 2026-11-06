@@ -33,7 +33,8 @@ internal class IndexBackfill(private val db: Storage) {
             val expected = cursor
             val advanced = db.atomic { tx ->
                 val current = current(tx, table, index, expected) ?: return@atomic false
-                val item = tx.read(row.key.toStringUtf8())?.let(Records::item)
+                val address = row.key.toStringUtf8()
+                val item = tx.read(address)?.let { Records.itemAt(current, address, it) }
                 if (item != null) index.existingEntry(current, item)?.let {
                     tx.write(it, Records.encodeItem(item))
                 }

@@ -1,7 +1,6 @@
 """Check index ordering, concurrent backfill, sparse updates and table generations."""
 import time
 import json
-import json
 from urllib.error import HTTPError
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4

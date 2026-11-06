@@ -1,5 +1,7 @@
 """Exercise conditional writes through the HTTP API with a real TiKV store."""
 import json
+import io
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
@@ -16,8 +18,18 @@ def request(operation, _target="DynamoDB_20120810.", **payload):
         "Content-Type": "application/x-amz-json-1.0",
         "X-Amz-Target": _target + operation,
     })
-    with urlopen(req, timeout=30) as response:
-        return json.load(response)
+    for attempt in range(8):
+        try:
+            with urlopen(req, timeout=30) as response:
+                return json.load(response)
+        except HTTPError as error:
+            body = error.read()
+            code = json.loads(body).get("__type")
+            if code != "ProvisionedThroughputExceededException" or attempt == 7:
+                raise HTTPError(error.url, error.code, error.msg, error.hdrs, io.BytesIO(body)) from error
+            # This response guarantees a rejected prewrite. Never retry an ambiguous 500 here.
+            print(f"Retrying throttled {operation}", file=sys.stderr)
+            time.sleep(min(.05 * 2 ** attempt, .5))
 
 
 def main():

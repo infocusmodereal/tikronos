@@ -156,6 +156,9 @@ class StreamTtlIntegrationTest {
         writer.mutate(table, behind) { renewed }
         writer.mutate(table, ahead) { ahead + ("expires" to Value.number((now - 1).toBigDecimal())) }
         val resumed = TtlWorker(db, Ttl(db))
+        resumed.tick(writer)
+        assertEquals(null,
+            TtlRecords.state(requireNotNull(db.read(db.snapshot(), TtlRecords.config(table.id)))).cursor)
         advanceUntil({
             TtlRecords.state(requireNotNull(db.read(db.snapshot(), TtlRecords.config(table.id)))).cursor == null &&
                 db.read(db.snapshot(), table.address(ahead)) == null &&

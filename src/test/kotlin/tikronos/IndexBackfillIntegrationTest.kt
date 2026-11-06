@@ -4,6 +4,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import org.junit.jupiter.api.Tag
 import org.tikv.common.TiConfiguration
@@ -69,6 +70,40 @@ class IndexBackfillIntegrationTest {
                 addresses.chunked(16).forEach { chunk -> db.atomic { tx ->
                     chunk.forEach { tx.write(it, null) }
                 } }
+            }
+        }
+    }
+
+    @Test
+    fun `decodable corrupt primary keys do not become active indexes`() {
+        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
+        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
+            val db = Storage(session)
+            val id = UUID.randomUUID().toString()
+            val index = Index("byGroup", UUID.randomUUID().toString(), "group", "S", status = "CREATING")
+            val table = Table("000corrupt-$id", id, "pk", 0, null, hashed = true, indexes = listOf(index))
+            val valid = mapOf("pk" to Value.text("row"), "group" to Value.text("g"))
+            val address = table.address(valid)
+            val corruptions = listOf(valid - "pk", valid + ("pk" to Value.number(1.toBigDecimal())),
+                valid + ("pk" to Value.text("wrong-address")))
+            try {
+                for (corrupt in corruptions) {
+                    db.atomic { tx ->
+                        tx.write(Storage.CATALOG + table.name, Records.encodeTable(table))
+                        tx.write(address, Records.encodeItem(corrupt))
+                    }
+                    IndexBackfill(db).tick()
+                    val current = Records.table(requireNotNull(db.read(db.snapshot(), Storage.CATALOG + table.name)))
+                    assertEquals("CREATING", current.indexes.single().status)
+                    assertNull(current.indexes.single().cursor)
+                    val prefix = index.schema(table).prefix()
+                    assertTrue(db.ranges.scan(bytes(prefix), prefixEnd(prefix), true).none())
+                }
+            } finally {
+                db.atomic { tx ->
+                    tx.write(Storage.CATALOG + table.name, null)
+                    tx.write(address, null)
+                }
             }
         }
     }
