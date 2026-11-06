@@ -122,3 +122,8 @@ internal const val MAX_PRECISION = 38
 private const val MIN_EXPONENT_MAGNITUDE = 130
 private const val MAX_EXPONENT = 125
 private const val DOCUMENT_OVERHEAD = 3
+
+internal fun attributeName(name: String): String {
+    if (name.isEmpty()) invalid("Empty attribute name")
+    return validatedString(name)
+}

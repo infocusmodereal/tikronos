@@ -10,6 +10,7 @@ import org.tikv.kvproto.Kvrpcpb
 import org.tikv.kvproto.TikvGrpc
 import org.tikv.shade.com.google.protobuf.ByteString
 import org.tikv.shade.io.grpc.StatusRuntimeException
+import org.tikv.txn.AbstractLockResolverClient
 
 internal val byteOrder = ByteString.unsignedLexicographicalComparator()
 
@@ -69,21 +70,7 @@ internal class RangeReader(private val session: TiSession) {
                 )
                 continue
             }
-            val errors =
-                response.pairsList.filter { it.hasError() }.map { it.error } +
-                    listOfNotNull(response.error.takeIf { response.hasError() })
-            if (errors.isNotEmpty()) {
-                errors.forEach {
-                    check(it.hasLocked()) { "TiKV rejected scan: $it" }
-                    snap.get(codec.decodeKey(it.locked.key))
-                    resolved += it.locked.lockVersion
-                }
-                retry.doBackOff(
-                    BackOffFuncType.BoTxnLockFast,
-                    IllegalStateException("Resolving scan lock"),
-                )
-                continue
-            }
+            if (resolveLocks(response, region, snap.version, retry, resolved)) continue
             val rows = codec.decodeKvPairs(response.pairsList)
             val next =
                 if (rows.size < RPC_ROWS) {
@@ -91,6 +78,35 @@ internal class RangeReader(private val session: TiSession) {
                 } else if (forward) after(rows.last().key) else rows.last().key
             return Page(rows, next)
         }
+    }
+
+    private fun resolveLocks(
+        response: Kvrpcpb.ScanResponse,
+        region: TiRegion,
+        version: Long,
+        retry: ConcreteBackOffer,
+        resolved: MutableSet<Long>,
+    ): Boolean {
+        val errors =
+            response.pairsList.filter { it.hasError() }.map { it.error } +
+                listOfNotNull(response.error.takeIf { response.hasError() })
+        if (errors.isNotEmpty()) {
+            val locks = errors.map { AbstractLockResolverClient.extractLockFromKeyErr(it, codec) }
+            val resolution =
+                session.regionStoreClientBuilder.build(region).use { client ->
+                    client.lockResolverClient.resolveLocks(retry, version, locks, false)
+                }
+            resolved += resolution.resolvedLocks
+            if (resolution.msBeforeTxnExpired > 0) {
+                retry.doBackOffWithMaxSleep(
+                    BackOffFuncType.BoTxnLockFast,
+                    resolution.msBeforeTxnExpired,
+                    IllegalStateException("Waiting for a scan lock"),
+                )
+            }
+            return true
+        }
+        return false
     }
 
     /** Only consult region metadata when the exclusive upper bound is exactly a split point. */

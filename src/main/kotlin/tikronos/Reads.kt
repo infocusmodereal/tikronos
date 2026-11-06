@@ -93,11 +93,11 @@ internal class Reads(private val db: Storage, private val tables: Tables) {
     private fun selectCount(req: ObjectNode, projection: List<Path>?): Boolean {
         if (!req.has("Select")) return false
         val select = req.string("Select")
-        if (
-            select !in setOf("COUNT", "ALL_ATTRIBUTES", "SPECIFIC_ATTRIBUTES") ||
-                projection != null && select != "SPECIFIC_ATTRIBUTES"
-        )
+        if (select !in setOf("COUNT", "ALL_ATTRIBUTES", "SPECIFIC_ATTRIBUTES"))
             invalid("Invalid Select")
+        if ((projection != null) != (select == "SPECIFIC_ATTRIBUTES")) {
+            invalid("Select=SPECIFIC_ATTRIBUTES requires AttributesToGet or ProjectionExpression")
+        }
         return select == "COUNT"
     }
 

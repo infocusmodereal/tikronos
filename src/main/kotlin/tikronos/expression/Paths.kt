@@ -3,14 +3,23 @@ package tikronos.expression
 import tikronos.invalid
 import tikronos.model.Item
 import tikronos.model.Value
+import tikronos.model.attributeName
 
 internal sealed interface Step {
-    data class Name(val name: String) : Step
+    data class Name(val name: String) : Step {
+        init {
+            attributeName(name)
+        }
+    }
 
     data class Index(val index: Int) : Step
 }
 
 internal data class Path(val root: String, val steps: List<Step> = emptyList()) {
+    init {
+        attributeName(root)
+    }
+
     fun read(item: Item): Value? =
         steps.fold(item[root]) { value, step ->
             when (step) {

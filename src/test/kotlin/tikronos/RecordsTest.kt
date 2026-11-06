@@ -6,6 +6,10 @@ import tikronos.model.Table
 import tikronos.model.Throughput
 import tikronos.model.Value
 import tikronos.storage.Records
+import tikronos.storage.Storage
+import tikronos.storage.address
+import tikronos.storage.byteOrder
+import tikronos.storage.segmentEdge
 
 class RecordsTest {
     @Test
@@ -20,6 +24,12 @@ class RecordsTest {
                 Throughput(2, 3),
             )
         assertEquals(provisioned, Records.table(old))
+        assertEquals(
+            Storage.itemKey(provisioned.id, "state"),
+            provisioned.address(mapOf("id" to Value.text("state"))),
+        )
+        val edges = (0..4).map { provisioned.segmentEdge(it, 4) }
+        kotlin.test.assertTrue(edges.zipWithNext().all { (a, b) -> byteOrder.compare(a, b) < 0 })
         val table = Table("Locks", "123", "id", 1, null)
         val v1 =
             """{"name":"Locks","id":"123","partitionKey":"id","createdAt":1,"throughput":null}"""

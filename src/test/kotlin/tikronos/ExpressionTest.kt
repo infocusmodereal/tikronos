@@ -10,6 +10,20 @@ import tikronos.model.Value
 
 class ExpressionTest {
     @Test
+    fun `invalid legacy and aliased names fail before entering the transaction`() {
+        val req =
+            obj("AttributeUpdates" to obj("" to obj("Action" to "PUT", "Value" to obj("S" to "x"))))
+        assertFailsWith<ApiError> { RequestExpressions(req).updates() }
+        val alias =
+            obj(
+                "UpdateExpression" to "SET #bad = :v",
+                "ExpressionAttributeNames" to obj("#bad" to "\uD800"),
+                "ExpressionAttributeValues" to obj(":v" to obj("S" to "x")),
+            )
+        assertFailsWith<ApiError> { RequestExpressions(alias).updates() }
+    }
+
+    @Test
     fun `all right hand sides see original list indices`() {
         val expressions =
             RequestExpressions(obj("UpdateExpression" to "REMOVE vals[0] SET vals[2] = vals[1]"))

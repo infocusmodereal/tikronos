@@ -30,6 +30,7 @@ internal fun Table.queryRange(predicate: Predicate?): KeyRange {
 
 private fun Table.sortRange(partition: Value, prefix: String, check: Predicate.Check): KeyRange {
     val value = check.literal(1, requireNotNull(sortType))
+    validateKeyValue(value, sortType, false)
     val bound = prefix + ordered(value)
     val after = bound + "\u0000"
     val (low, high) =
@@ -40,7 +41,9 @@ private fun Table.sortRange(partition: Value, prefix: String, check: Predicate.C
             ">" -> after to prefix + "g"
             ">=" -> bound to prefix + "g"
             "BETWEEN" -> {
-                val last = prefix + ordered(check.literal(2, sortType))
+                val high = check.literal(2, sortType)
+                validateKeyValue(high, sortType, false)
+                val last = prefix + ordered(high)
                 if (last < bound) invalid("Invalid BETWEEN bounds")
                 bound to last + "\u0000"
             }

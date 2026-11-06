@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import tikronos.model.Table
 import tikronos.model.Throughput
+import tikronos.model.attributeName
 
 internal fun keySchema(req: ObjectNode): List<Pair<String, String>> {
     val keys = req.path("KeySchema")
@@ -32,7 +33,8 @@ internal fun keySchema(req: ObjectNode): List<Pair<String, String>> {
     )
         invalid("Duplicate or missing key")
     return sorted.map { (_, name) ->
-        if (name.isBlank()) invalid("Empty key name")
+        attributeName(name)
+        if (name.encodeToByteArray().size > MAX_KEY_NAME_BYTES) invalid("Key name too long")
         name to (types[name] ?: invalid("Missing attribute definition"))
     }
 }
@@ -90,3 +92,5 @@ internal fun description(table: Table) =
                 )
             }
         }
+
+private const val MAX_KEY_NAME_BYTES = 255

@@ -28,9 +28,8 @@ internal fun Table.partitionPrefix(value: Value): String {
         val hash = CRC32().apply { update(encoded.encodeToByteArray()) }.value
         return prefix() + uintHex(hash) + "!" + encoded + "!"
     }
-    // Retain the original physical layout for all string-only HASH tables.
-    return if (sortKey == null && partitionType == "S") prefix() + value.stringValue()
-    else prefix() + ordered(value) + "!"
+    // Pre-release catalog records have only a string HASH key and retain their raw address.
+    return prefix() + value.stringValue()
 }
 
 internal fun Table.address(key: Item): String =
@@ -87,7 +86,7 @@ internal fun Table.segmentEdge(segment: Int, total: Int): ByteString {
 
 private fun Table.interiorEdge(segment: Int, total: Int): ByteString {
     val cut = HASH_SPACE * segment / total
-    if (hashed || sortKey != null || partitionType != "S") return bytes(prefix() + uintHex(cut))
+    if (hashed) return bytes(prefix() + uintHex(cut))
     return bytes(prefix())
         .concat(
             ByteString.copyFrom(

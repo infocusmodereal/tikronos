@@ -6,9 +6,8 @@ import tikronos.ApiError
 import tikronos.invalid
 import tikronos.model.Item
 import tikronos.model.MAX_DEPTH
-import tikronos.model.MAX_PRECISION
 import tikronos.model.Value
-import tikronos.model.validatedString
+import tikronos.model.attributeName
 import tikronos.obj
 
 internal fun Value.wire(): JsonNode =
@@ -16,9 +15,7 @@ internal fun Value.wire(): JsonNode =
         type to
             when (this) {
                 is Value.Text -> value
-                is Value.Number ->
-                    if (value.precision() - value.scale() > MAX_PRECISION) value.toString()
-                    else value.toPlainString()
+                is Value.Number -> value.toPlainString()
                 is Value.Binary -> base64
                 is Value.Bool -> value
                 Value.Null -> true
@@ -90,8 +87,7 @@ private fun scalar(type: String, data: JsonNode): Value {
 internal fun parseItem(node: JsonNode, depth: Int = 0): Item {
     if (!node.isObject) invalid("Expected attribute map")
     return node.properties().associate { (name, value) ->
-        if (name.isEmpty()) invalid("Empty attribute name")
-        validatedString(name) to parseValue(value, depth)
+        attributeName(name) to parseValue(value, depth)
     }
 }
 
