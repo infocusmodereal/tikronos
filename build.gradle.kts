@@ -25,5 +25,13 @@ dependencies {
 }
 
 tasks.test {
-    useJUnitPlatform()
+    useJUnitPlatform { excludeTags("tikv") }
+}
+
+
+tasks.register<Test>("integrationTest") {
+    description = "Run storage protocol checks against TIKRONOS_TEST_PD."
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform { includeTags("tikv") }
 }

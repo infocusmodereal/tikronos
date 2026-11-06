@@ -29,6 +29,7 @@ jobs:
             fi
             sleep 1
           done
+          TIKRONOS_TEST_PD=127.0.0.1:2379 ./gradlew integrationTest
           build/install/tikronos/bin/tikronos &
           server=$!
           trap 'kill "$server" || true; docker compose -f integration/compose.yaml down -v' EXIT

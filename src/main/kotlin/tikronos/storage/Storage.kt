@@ -5,6 +5,7 @@ import org.tikv.common.TiSession
 import org.tikv.common.exception.KeyException
 import org.tikv.common.exception.TiBatchWriteException
 import org.tikv.common.util.ConcreteBackOffer
+import org.tikv.shade.com.google.protobuf.ByteString
 import org.tikv.txn.TwoPhaseCommitter
 import org.tikv.txn.exception.WriteConflictException
 
@@ -40,11 +41,8 @@ internal class Storage(private val session: TiSession) {
                     if (!error.isConflict()) throw error
                     return@repeat
                 }
-                txn.commitPrimaryKey(
-                    ConcreteBackOffer.newCustomBackOff(BACKOFF_MS),
-                    bytes,
-                    session.timestamp.version,
-                )
+                SingleKeyCommit(session)
+                    .commit(ByteString.copyFrom(bytes), snapshot.version, session.timestamp.version)
                 return old
             }
         }
