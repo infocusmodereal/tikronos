@@ -1,5 +1,7 @@
 # TiKronos
 
+[Documentation](https://infocusmodereal.github.io/tikronos/) | [Quickstart](https://infocusmodereal.github.io/tikronos/quickstart/)
+
 TiKronos aims to let applications use the DynamoDB API with TiKV as their storage engine. Its first compatibility target is conditional writes for state locking.
 
 TiKronos takes its name from TiKV and a play on Chronos and Kronos (Cronus), the Titan who devoured his children in Greek mythology. The idea is to give TiKV an appetite for DynamoDB workloads. Bring yours.

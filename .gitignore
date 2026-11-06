@@ -3,3 +3,6 @@
 build/
 
 __pycache__/
+
+.venv-docs/
+site/
