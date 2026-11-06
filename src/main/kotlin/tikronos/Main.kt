@@ -60,7 +60,9 @@ fun main(args: Array<String>) {
         "Credentials required on non-loopback listeners"
     }
     val session = TiSession.create(TiConfiguration.createDefault(System.getenv("TIKRONOS_PD") ?: "127.0.0.1:2379"))
-    val api = Dynamo(Storage(session), signature)
+    val storage = Storage(session)
+    val api = Dynamo(storage, signature)
+    val maintenance = Maintenance(storage)
     val server = HttpServer.create(bind, 0)
     val workers = Executors.newFixedThreadPool(WORKERS)
     server.executor = workers
@@ -70,11 +72,16 @@ fun main(args: Array<String>) {
         try {
             workers.awaitTermination(DRAIN_SECONDS, TimeUnit.SECONDS)
         } finally {
-            session.close()
+            try {
+                maintenance.close()
+            } finally {
+                session.close()
+            }
         }
     })
     server.createContext("/") { exchange -> exchange.use { route(it, api) } }
     server.start()
+    maintenance.start()
 }
 
 private fun route(exchange: HttpExchange, api: Dynamo) {

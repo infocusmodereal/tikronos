@@ -11,10 +11,10 @@ TABLE = "Locks" + uuid4().hex
 CLIENTS = 4
 
 
-def request(operation, **payload):
+def request(operation, _target="DynamoDB_20120810.", **payload):
     req = Request("http://127.0.0.1:8000/", json.dumps(payload).encode(), headers={
         "Content-Type": "application/x-amz-json-1.0",
-        "X-Amz-Target": "DynamoDB_20120810." + operation,
+        "X-Amz-Target": _target + operation,
     })
     with urlopen(req, timeout=30) as response:
         return json.load(response)

@@ -4,6 +4,8 @@ import tikronos.expression.Operand
 import tikronos.expression.Predicate
 import tikronos.model.Table
 import tikronos.model.Value
+import tikronos.storage.INDEX_KEY_END
+import tikronos.storage.INDEX_KEY_AFTER
 import tikronos.storage.ordered
 import tikronos.storage.partitionPrefix
 import tikronos.storage.prefix
@@ -12,7 +14,7 @@ import tikronos.storage.validateKeyValue
 /** Half-open TiKV range. Encoded sort keys use only hexadecimal or decimal digits. */
 internal data class KeyRange(val partition: Value, val start: String, val end: String)
 
-internal fun Table.queryRange(predicate: Predicate?): KeyRange {
+internal fun Table.queryRange(predicate: Predicate?, index: Boolean = false): KeyRange {
     val checks = flatten(predicate).map { it.keyFirst() }.associateByUniqueKey()
     val hash = checks[partitionKey] ?: invalid("Key condition missed partition key $partitionKey")
     if (hash.op != "=" || checks.keys.any { it != partitionKey && it != sortKey })
@@ -22,17 +24,18 @@ internal fun Table.queryRange(predicate: Predicate?): KeyRange {
     val prefix = partitionPrefix(partition)
     val check = sortKey?.let { checks[it] }
     return when {
-        sortKey == null -> KeyRange(partition, prefix, prefix + "\u0000")
+        sortKey == null -> KeyRange(partition, prefix, prefix + if (index) "g" else "\u0000")
         check == null -> KeyRange(partition, prefix, prefix + "g")
-        else -> sortRange(partition, prefix, check)
+        else -> sortRange(partition, prefix, check, index)
     }
 }
 
-private fun Table.sortRange(partition: Value, prefix: String, check: Predicate.Check): KeyRange {
+private fun Table.sortRange(partition: Value, prefix: String, check: Predicate.Check, index: Boolean): KeyRange {
     val value = check.literal(1, requireNotNull(sortType))
     validateKeyValue(value, sortType, false)
-    val bound = prefix + ordered(value)
-    val after = bound + "\u0000"
+    val literal = prefix + ordered(value)
+    val bound = literal + if (index) INDEX_KEY_END else ""
+    val after = literal + if (index) INDEX_KEY_AFTER else "\u0000"
     val (low, high) =
         when (check.op) {
             "=" -> bound to after
@@ -44,12 +47,12 @@ private fun Table.sortRange(partition: Value, prefix: String, check: Predicate.C
                 val high = check.literal(2, sortType)
                 validateKeyValue(high, sortType, false)
                 val last = prefix + ordered(high)
-                if (last < bound) invalid("Invalid BETWEEN bounds")
-                bound to last + "\u0000"
+                if (last < literal) invalid("Invalid BETWEEN bounds")
+                bound to last + if (index) INDEX_KEY_AFTER else "\u0000"
             }
             "begins_with" -> {
                 if (sortType == "N") invalid("begins_with requires string or binary")
-                bound to bound + "g"
+                literal to literal + "g"
             }
             else -> invalid("Unsupported KeyConditionExpression operator")
         }

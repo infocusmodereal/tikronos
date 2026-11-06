@@ -12,7 +12,7 @@ import org.tikv.shade.com.google.protobuf.ByteString
  * and the prepared value. Transport errors remain ambiguous and must never replay the update.
  */
 internal class SingleKeyCommit(private val session: TiSession) {
-    fun commit(key: ByteString, startTs: Long, initialCommitTs: Long) {
+    fun commit(key: ByteString, startTs: Long, initialCommitTs: Long): Long {
         val budget = ConcreteBackOffer.newCustomBackOff(COMMIT_BUDGET_MS)
         var commitTs = initialCommitTs
         while (true) {
@@ -20,7 +20,7 @@ internal class SingleKeyCommit(private val session: TiSession) {
                 session.regionStoreClientBuilder.build(key, budget).use { client ->
                     client.commit(budget, listOf(key), startTs, commitTs)
                 }
-                return
+                return commitTs
             } catch (error: KeyException) {
                 val detail = error.keyErr
                 if (detail?.hasCommitTsExpired() != true) throw error

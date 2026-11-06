@@ -31,9 +31,12 @@ internal class RangeReader(private val session: TiSession) {
     private val codec
         get() = session.pdClient.codec
 
-    fun scan(first: ByteString, end: ByteString, forward: Boolean): Sequence<Kvrpcpb.KvPair> =
+    fun scan(
+        first: ByteString, end: ByteString, forward: Boolean,
+        snapshot: Snapshot = session.createSnapshot(),
+    ): Sequence<Kvrpcpb.KvPair> =
         sequence {
-            val snap = session.createSnapshot()
+            val snap = snapshot
             var low = first
             var high = end
             while (byteOrder.compare(low, high) < 0) {
