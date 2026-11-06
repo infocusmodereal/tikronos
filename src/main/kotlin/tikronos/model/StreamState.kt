@@ -12,8 +12,6 @@ internal data class StreamState(
     val head: Long = 0,
     val trimmed: Long = 0,
     val closedAt: Long? = null,
-) {
-    val shard: String get() = "shardId-00000000000000000000-${tableId.replace("-", "") }"
-}
+)
 
 internal data class StreamPosition(val arn: String, val after: Long, val expires: Long)

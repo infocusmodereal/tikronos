@@ -16,6 +16,11 @@ internal val byteOrder = ByteString.unsignedLexicographicalComparator()
 
 internal fun bytes(value: String): ByteString = ByteString.copyFromUtf8(value)
 
+internal fun prefixEnd(prefix: String): ByteString {
+    require(prefix.endsWith('/')) { "Expected a namespace prefix" }
+    return bytes(prefix.dropLast(1) + "0")
+}
+
 internal fun after(key: ByteString): ByteString = key.concat(ZERO)
 
 private val ZERO = ByteString.copyFrom(byteArrayOf(0))

@@ -1,6 +1,7 @@
 package tikronos.storage
 
 import java.util.concurrent.TimeUnit
+import tikronos.invalid
 import java.util.logging.Level
 import java.util.logging.Logger
 import org.tikv.common.TiSession
@@ -16,6 +17,8 @@ internal class AtomicCommit(private val session: TiSession) {
     @Suppress("TooGenericExceptionCaught") // Abort every prewrite failure before a commit decision.
     fun commit(start: Long, values: Map<String, ByteArray?>, guards: Set<String> = emptySet()): Boolean {
         val entries = (values.keys + guards).sorted()
+        if (entries.any { it.encodeToByteArray().size > MAX_KEY_BYTES })
+            invalid("Encoded key exceeds storage limit")
         val primary = bytes(entries.first())
         // TiKV measures TTL from startTs, including time spent reading before prewrite.
         val lockTtl = maxOf(0, timestampMillis(session.timestamp.version) - timestampMillis(start)) + LOCK_TTL_MS
@@ -85,6 +88,8 @@ internal class AtomicCommit(private val session: TiSession) {
     }
 
     companion object {
+        // Leave room for TiKV memcomparable encoding and the MVCC version under its 8 KiB limit.
+        private const val MAX_KEY_BYTES = 7 * 1024
         private const val LOCK_TTL_MS = 10_000L
         private const val BUDGET_MS = 3000
         private val logger = Logger.getLogger(AtomicCommit::class.java.name)

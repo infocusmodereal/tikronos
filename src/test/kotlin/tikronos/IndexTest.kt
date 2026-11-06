@@ -76,6 +76,16 @@ class IndexTest {
     }
 
     @Test
+    fun `maximum base and index keys use a bounded identity suffix`() {
+        val composite = table.copy(sortKey = "sk", sortType = "S")
+        val item = mapOf("pk" to Value.text("p".repeat(2048)), "sk" to Value.text("s".repeat(1024)),
+            "group" to Value.text("g".repeat(2048)), "rank" to Value.text("r".repeat(1024)))
+        val address = requireNotNull(index.entry(composite, item))
+        assertTrue(address.encodeToByteArray().size < 7000)
+        assertNotEquals(address, index.entry(composite, item + ("sk" to Value.text("other"))))
+    }
+
+    @Test
     fun `billing transitions clear or require capacity for every global index`() {
         val provisioned = table.copy(throughput = Throughput(2, 2),
             indexes = listOf(index.copy(throughput = Throughput(1, 1))))

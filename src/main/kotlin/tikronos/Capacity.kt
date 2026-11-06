@@ -2,7 +2,6 @@ package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlin.math.max
-import tikronos.model.Index
 import tikronos.model.CapacityUnits
 import tikronos.model.Item
 import tikronos.model.Table
@@ -18,8 +17,6 @@ internal class Capacity(req: ObjectNode) {
         if (mode !in setOf("TOTAL", "INDEXES", "NONE")) invalid("Invalid ReturnConsumedCapacity")
     }
 
-    fun entry(table: String, units: Double): ObjectNode = entry(table, CapacityUnits(units))
-
     private fun entry(table: String, usage: CapacityUnits): ObjectNode =
         obj("TableName" to table, "CapacityUnits" to usage.total).apply {
             if (mode == "INDEXES") {
@@ -32,14 +29,7 @@ internal class Capacity(req: ObjectNode) {
     private fun breakdown(units: Map<String, Double>): ObjectNode =
         json.valueToTree(units.mapValues { obj("CapacityUnits" to it.value) })
 
-    fun add(response: ObjectNode, table: String, units: Double, index: Index? = null) {
-        val usage = when {
-            index == null -> CapacityUnits(units)
-            index.local -> CapacityUnits(0.0, local = mapOf(index.name to units))
-            else -> CapacityUnits(0.0, global = mapOf(index.name to units))
-        }
-        add(response, table, usage)
-    }
+    fun add(response: ObjectNode, table: String, units: Double) = add(response, table, CapacityUnits(units))
 
     fun add(response: ObjectNode, table: String, usage: CapacityUnits) {
         if (mode != "NONE") response.set<ObjectNode>("ConsumedCapacity", entry(table, usage))

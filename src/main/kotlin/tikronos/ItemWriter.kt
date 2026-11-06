@@ -10,7 +10,6 @@ import tikronos.storage.address
 
 /** The shared mutation boundary for API writes, batches and expiration. */
 internal class ItemWriter(private val db: Storage) {
-    private val indexes = IndexMaintenance()
     private val ttl = Ttl(db)
     private val streams = Streams(db)
 
@@ -31,7 +30,7 @@ internal class ItemWriter(private val db: Storage) {
         val old = tx.read(address)?.let(Records::item)
         val next = change(old)
         val encoded = next?.let(::encodeChecked)
-        indexes.update(tx, current, old, next)
+        maintainIndexes(tx, current, old, next)
         this.ttl.track(tx, current, old, next)
         streams.record(tx, current, old, next, ttl)
         tx.write(address, encoded)

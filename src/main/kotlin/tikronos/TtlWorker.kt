@@ -7,6 +7,7 @@ import tikronos.storage.Storage
 import tikronos.storage.TtlRecords
 import tikronos.storage.after
 import tikronos.storage.bytes
+import tikronos.storage.prefixEnd
 import tikronos.storage.prefix
 import tikronos.storage.address
 
@@ -17,7 +18,7 @@ internal class TtlWorker(private val db: Storage, private val ttl: Ttl) {
     fun tick(writer: ItemWriter) {
         val configs = TtlRecords.CONFIGS
         val first = if (configAfter.isEmpty()) bytes(configs) else after(bytes(configAfter))
-        val page = db.ranges.scan(first, bytes(configs.dropLast(1) + "0"), true)
+        val page = db.ranges.scan(first, prefixEnd(configs), true)
             .take(BATCH_SIZE).toList()
         configAfter = if (page.size < BATCH_SIZE) "" else page.last().key.toStringUtf8()
         for (row in page) maintenanceAttempt("TTL backfill") {
@@ -54,7 +55,7 @@ internal class TtlWorker(private val db: Storage, private val ttl: Ttl) {
             ?.takeIf { it.id == state.tableId } ?: return
         val prefix = table.prefix()
         val first = state.cursor?.takeIf { it.isNotEmpty() }?.let { after(bytes(it)) } ?: bytes(prefix)
-        val rows = db.ranges.scan(first, bytes(prefix.dropLast(1) + "0"), true).take(BATCH_SIZE).toList()
+        val rows = db.ranges.scan(first, prefixEnd(prefix), true).take(BATCH_SIZE).toList()
         db.atomic { tx ->
             val live = tx.read(Storage.CATALOG + table.name)?.let(Records::table)
             val current = tx.read(TtlRecords.config(table.id))?.let(TtlRecords::state)

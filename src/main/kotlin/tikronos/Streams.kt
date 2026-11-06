@@ -8,6 +8,7 @@ import tikronos.model.Item
 import tikronos.model.StreamState
 import tikronos.model.Table
 import tikronos.model.itemSize
+import tikronos.storage.timestampSeconds
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
 import tikronos.storage.Transaction
@@ -77,7 +78,7 @@ internal class Streams(private val db: Storage) {
         val includeNew = state.view in setOf("NEW_IMAGE", "NEW_AND_OLD_IMAGES")
         val size = itemSize(keys) + (if (includeOld) itemSize(old.orEmpty()) else 0) +
             (if (includeNew) itemSize(new.orEmpty()) else 0)
-        val data = obj("ApproximateCreationDateTime" to tikronos.storage.timestampSeconds(sequence),
+        val data = obj("ApproximateCreationDateTime" to timestampSeconds(sequence),
             "Keys" to wireItem(keys), "SequenceNumber" to StreamRecords.sequence(sequence),
             "StreamViewType" to state.view, "SizeBytes" to size)
         if (old != null && includeOld)

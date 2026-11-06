@@ -31,3 +31,9 @@ internal object StreamRecords {
     fun sequence(value: Long) = value.toString().padStart(SEQUENCE_WIDTH, '0')
     private const val SEQUENCE_WIDTH = 20
 }
+
+/** Shard identity belongs to a stream generation, including disable/re-enable on one table. */
+internal val StreamState.shard: String
+    get() = "shardId-" + keyDigest(label).take(SHARD_DIGEST_CHARS)
+
+private const val SHARD_DIGEST_CHARS = 32

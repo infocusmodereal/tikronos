@@ -3,7 +3,7 @@ package tikronos
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import tikronos.storage.ContentionLimitExceeded
-import tikronos.model.BatchWrite
+import tikronos.protocol.BatchWrite
 import tikronos.model.Table
 import tikronos.model.Value
 import tikronos.model.WriteResult

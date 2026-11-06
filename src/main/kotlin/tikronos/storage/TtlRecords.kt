@@ -1,6 +1,5 @@
 package tikronos.storage
 
-import java.util.HexFormat
 import tikronos.codec.parseItem
 import tikronos.codec.wireItem
 import tikronos.json
@@ -15,7 +14,7 @@ internal object TtlRecords {
     fun address(candidate: ExpiryCandidate, itemAddress: String) =
         CANDIDATES + candidate.expiry.toString().padStart(TIME_WIDTH, '0') + "/" +
             candidate.tableId + "/" + candidate.generation + "/" +
-            HexFormat.of().formatHex(itemAddress.encodeToByteArray())
+            keyDigest(itemAddress)
 
     fun encode(state: TtlState): ByteArray = json.writeValueAsBytes(obj(
         "tableName" to state.tableName, "tableId" to state.tableId,

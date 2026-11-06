@@ -9,6 +9,7 @@ import tikronos.storage.after
 import tikronos.storage.bytes
 import tikronos.storage.existingEntry
 import tikronos.storage.prefix
+import tikronos.storage.prefixEnd
 
 internal class IndexBackfill(private val db: Storage) {
     private var afterTable = ""
@@ -25,7 +26,7 @@ internal class IndexBackfill(private val db: Storage) {
     private fun backfill(table: Table, index: Index) {
         val prefix = table.prefix()
         val first = index.cursor?.let { after(bytes(it)) } ?: bytes(prefix)
-        val rows = db.ranges.scan(first, bytes(prefix.dropLast(1) + "0"), true)
+        val rows = db.ranges.scan(first, prefixEnd(prefix), true)
             .take(ROWS_PER_TICK).toList()
         var cursor = index.cursor
         for (row in rows) {

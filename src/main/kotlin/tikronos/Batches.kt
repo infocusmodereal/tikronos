@@ -7,7 +7,7 @@ import tikronos.expression.Path
 import tikronos.expression.RequestExpressions
 import tikronos.expression.project
 import tikronos.model.Item
-import tikronos.model.BatchWrite
+import tikronos.protocol.BatchWrite
 import tikronos.model.WriteResult
 import tikronos.model.CapacityUnits
 import tikronos.model.Table

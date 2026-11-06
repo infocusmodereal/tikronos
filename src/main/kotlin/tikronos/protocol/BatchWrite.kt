@@ -1,4 +1,7 @@
-package tikronos.model
+package tikronos.protocol
+
+import tikronos.model.Table
+import tikronos.model.Item
 
 import com.fasterxml.jackson.databind.node.ObjectNode
 

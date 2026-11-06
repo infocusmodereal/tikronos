@@ -16,7 +16,7 @@ internal fun Index.entry(table: Table, item: Item): String? {
     }
     if (item[partitionKey] == null || sortKey?.let { item[it] == null } == true) return null
     val key = table.address(table.key(item, false))
-    return schema(table).address(item) + INDEX_KEY_END + key
+    return schema(table).address(item) + INDEX_KEY_END + keyDigest(key)
 }
 
 internal fun Index.projected(table: Table): Set<String>? =

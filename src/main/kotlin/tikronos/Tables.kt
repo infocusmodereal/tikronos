@@ -6,6 +6,7 @@ import java.util.UUID
 import tikronos.model.Table
 import tikronos.storage.Records
 import tikronos.storage.Storage
+import tikronos.storage.TtlRecords
 
 internal class Tables(private val db: Storage) {
     private val streams = Streams(db)
@@ -59,6 +60,7 @@ internal class Tables(private val db: Storage) {
         val table = db.atomic { tx ->
             val table = tx.read(Storage.CATALOG + name)?.let(Records::table) ?: missing(name)
             streams.disable(tx, table)
+            tx.write(TtlRecords.config(table.id), null)
             tx.write(Storage.CATALOG + name, null)
             table
         }

@@ -14,7 +14,7 @@ internal class Storage(private val session: TiSession) {
     fun tables(after: String, limit: Int): List<String> {
         val start = CATALOG + after + if (after.isEmpty()) "" else "\u0000"
         return ranges
-            .scan(bytes(start), bytes(CATALOG.dropLast(1) + "0"), forward = true)
+            .scan(bytes(start), prefixEnd(CATALOG), forward = true)
             .map { it.key.toStringUtf8().removePrefix(CATALOG) }
             .take(limit)
             .toList()
@@ -28,12 +28,6 @@ internal class Storage(private val session: TiSession) {
             if (AtomicCommit(session).commit(tx.version, tx.writes, tx.guards())) return result
         }
         throw ContentionLimitExceeded()
-    }
-
-    fun mutate(key: String, change: (ByteArray?) -> ByteArray?): ByteArray? = atomic { tx ->
-        val old = tx.read(key)
-        tx.write(key, change(old))
-        old
     }
 
     companion object {

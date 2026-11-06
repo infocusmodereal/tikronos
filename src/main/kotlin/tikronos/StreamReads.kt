@@ -7,8 +7,11 @@ import tikronos.model.StreamPosition
 import tikronos.model.StreamState
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
+import tikronos.storage.shard
 import tikronos.storage.after
+import tikronos.storage.timestampStartOfSecond
 import tikronos.storage.bytes
+import tikronos.storage.prefixEnd
 
 internal class StreamReads(private val db: Storage) {
     private val tokens = StreamTokens(db)
@@ -21,7 +24,7 @@ internal class StreamReads(private val db: Storage) {
         val start = req.get("ExclusiveStartStreamArn")?.let { req.string("ExclusiveStartStreamArn") }
         val first = if (start == null) bytes(prefix) else after(bytes(StreamRecords.descriptor(start)))
         val snap = db.snapshot()
-        val states = db.ranges.scan(first, bytes(prefix.dropLast(1) + "0"), true, snap)
+        val states = db.ranges.scan(first, prefixEnd(prefix), true, snap)
             .map { StreamRecords.decode(it.value.toByteArray()) }
             .filter { (name == null || it.tableName == name) && retained(it) }
             .take(limit + 1).toList()
@@ -102,7 +105,7 @@ internal class StreamReads(private val db: Storage) {
         val state = db.read(snapshot, StreamRecords.descriptor(arn))?.let(StreamRecords::decode)
             ?.takeIf(::retained) ?: missingStream()
         // Enforce logical retention even if physical cleanup is behind. The sequence embeds PD time.
-        val cutoff = tikronos.storage.timestampStartOfSecond(Instant.now().epochSecond - STREAM_RETENTION_SECONDS + 1)
+        val cutoff = timestampStartOfSecond(Instant.now().epochSecond - STREAM_RETENTION_SECONDS + 1)
         val prefix = StreamRecords.events(state)
         val expired = db.ranges.scan(bytes(prefix), bytes(prefix + StreamRecords.sequence(cutoff)),
             false, snapshot).firstOrNull()?.key?.toStringUtf8()?.substringAfterLast('/')?.toLong() ?: 0

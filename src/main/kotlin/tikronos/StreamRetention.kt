@@ -5,6 +5,7 @@ import tikronos.model.StreamState
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
 import tikronos.storage.bytes
+import tikronos.storage.prefixEnd
 import tikronos.storage.after
 
 /** Small transactions keep retention work bounded while readers retain MVCC-consistent pages. */
@@ -14,7 +15,7 @@ internal class StreamRetention(private val db: Storage) {
     fun tick() {
         val prefix = StreamRecords.PREFIX
         val first = if (cursor.isEmpty()) bytes(prefix) else after(bytes(cursor))
-        val descriptors = db.ranges.scan(first, bytes(prefix.dropLast(1) + "0"), true)
+        val descriptors = db.ranges.scan(first, prefixEnd(prefix), true)
             .take(DESCRIPTOR_BATCH).toList()
         cursor = if (descriptors.size < DESCRIPTOR_BATCH) "" else descriptors.last().key.toStringUtf8()
         val cutoff = Instant.now().epochSecond - STREAM_RETENTION_SECONDS
@@ -25,7 +26,7 @@ internal class StreamRetention(private val db: Storage) {
 
     private fun prune(state: StreamState, cutoff: Long) {
         val events = StreamRecords.events(state)
-        val expired = db.ranges.scan(bytes(events), bytes(events.dropLast(1) + "0"), true)
+        val expired = db.ranges.scan(bytes(events), prefixEnd(events), true)
             .take(BATCH_SIZE).takeWhile {
                 json.readTree(it.value.toByteArray()).path("dynamodb")
                     .path("ApproximateCreationDateTime").longValue() <= cutoff
