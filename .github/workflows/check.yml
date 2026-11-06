@@ -15,4 +15,18 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-      - run: ./gradlew detekt test
+      - run: ./gradlew check installDist
+      - name: Verify concurrent lock acquisition on TiKV
+        run: |
+          docker compose -f integration/compose.yaml up -d
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:2379/pd/api/v1/stores | jq -e 'any(.stores[]?; .store.state_name == "Up")'; then
+              break
+            fi
+            if [ "$attempt" = 60 ]; then exit 1; fi
+            sleep 1
+          done
+          build/install/tikronos/bin/tikronos &
+          server=$!
+          trap 'kill "$server" || true; docker compose -f integration/compose.yaml down -v' EXIT
+          python3 integration/lock.py

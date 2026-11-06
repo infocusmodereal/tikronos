@@ -1,44 +1,31 @@
 package tikronos
 
-import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import tikronos.model.Table
+import tikronos.storage.Records
+import tikronos.storage.Storage
 import java.time.Instant
 import java.util.UUID
 
 internal class Tables(private val db: Storage) {
-    fun describe(name: String): ObjectNode = db.read(db.snapshot(), Storage.CATALOG + name) ?: missing(name)
+    fun find(name: String): Table = db.read(db.snapshot(), Storage.CATALOG + name)?.let(Records::table) ?: missing(name)
+
+    fun describe(req: ObjectNode): ObjectNode {
+        req.fieldsOnly("TableName")
+        return obj("Table" to description(find(tableName(req))))
+    }
 
     fun create(req: ObjectNode): ObjectNode {
         req.fieldsOnly("TableName", "AttributeDefinitions", "KeySchema", "BillingMode", "ProvisionedThroughput")
         val name = tableName(req)
-        val key = req.singleEntry("KeySchema")
-        val definition = req.singleEntry("AttributeDefinitions")
-        val field = key.string("AttributeName")
-        if (field.isBlank() || key.string("KeyType") != "HASH") invalid("Expected one HASH key")
-        if (definition.string("AttributeName") != field ||
-            definition.string("AttributeType") != "S") invalid("Expected one string HASH key")
-        val table = obj("TableName" to name, "TableStatus" to "ACTIVE", "TableId" to UUID.randomUUID().toString(),
-            "KeySchema" to req["KeySchema"], "AttributeDefinitions" to req["AttributeDefinitions"],
-            "CreationDateTime" to Instant.now().epochSecond)
-        when (req.path("BillingMode").asText("PROVISIONED")) {
-            "PAY_PER_REQUEST" -> if (req.has("ProvisionedThroughput")) invalid("Unexpected ProvisionedThroughput")
-            "PROVISIONED" -> {
-                val throughput = req.obj("ProvisionedThroughput")
-                for (capacity in listOf("ReadCapacityUnits", "WriteCapacityUnits")) {
-                    val units = throughput.path(capacity)
-                    if (!units.isIntegralNumber || !units.canConvertToLong() || units.longValue() < 1) {
-                        invalid("Expected positive $capacity")
-                    }
-                }
-                table.set<ObjectNode>("ProvisionedThroughput", throughput)
-            }
-            else -> invalid("Invalid BillingMode")
-        }
+        val table = Table(
+            name, UUID.randomUUID().toString(), partitionKey(req), Instant.now().epochSecond, throughput(req),
+        )
         db.mutate(Storage.CATALOG + name) { old ->
             if (old != null) throw ApiError("ResourceInUseException", "Table $name already exists")
-            table
+            Records.encodeTable(table)
         }
-        return obj("TableDescription" to table)
+        return obj("TableDescription" to description(table))
     }
 
     fun delete(req: ObjectNode): ObjectNode {
@@ -48,7 +35,7 @@ internal class Tables(private val db: Storage) {
             if (old == null) missing(name)
             null
         }
-        return obj("TableDescription" to checkNotNull(old))
+        return obj("TableDescription" to description(Records.table(checkNotNull(old))))
     }
 
     fun list(req: ObjectNode): ObjectNode {
@@ -65,9 +52,6 @@ internal class Tables(private val db: Storage) {
             if (names.size > limit) put("LastEvaluatedTableName", names[limit - 1])
         }
     }
-
-    private fun JsonNode.singleEntry(field: String): JsonNode =
-        path(field).takeIf { it.isArray && it.size() == 1 }?.first() ?: invalid("Expected one entry in $field")
 
     private fun missing(name: String): Nothing =
         throw ApiError("ResourceNotFoundException", "Table $name does not exist")

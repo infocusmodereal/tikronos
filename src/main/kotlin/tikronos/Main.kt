@@ -5,6 +5,8 @@ import com.sun.net.httpserver.HttpServer
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.URI
+import tikronos.storage.Storage
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
@@ -65,7 +67,11 @@ fun main(args: Array<String>) {
     Runtime.getRuntime().addShutdownHook(Thread {
         server.stop(1)
         workers.shutdown()
-        session.close()
+        try {
+            workers.awaitTermination(DRAIN_SECONDS, TimeUnit.SECONDS)
+        } finally {
+            session.close()
+        }
     })
     server.createContext("/") { exchange -> exchange.use { route(it, api) } }
     server.start()
@@ -88,4 +94,5 @@ private fun route(exchange: HttpExchange, api: Dynamo) {
 }
 
 private const val MAX_PORT = 65535
+private const val DRAIN_SECONDS = 10L
 private const val WORKERS = 8

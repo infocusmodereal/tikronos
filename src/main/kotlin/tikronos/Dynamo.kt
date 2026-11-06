@@ -3,6 +3,9 @@ package tikronos
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.sun.net.httpserver.HttpExchange
+import tikronos.model.ConditionFailed
+import tikronos.storage.Storage
+import tikronos.storage.ContentionLimitExceeded
 import java.util.UUID
 import java.net.HttpURLConnection
 import java.util.logging.Level
@@ -18,6 +21,12 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
         exchange.responseHeaders.set("Content-Type", "application/x-amz-json-1.0")
         val response = try {
             HttpURLConnection.HTTP_OK to request(exchange)
+        } catch (_: ConditionFailed) {
+            HttpURLConnection.HTTP_BAD_REQUEST to
+                obj("__type" to "ConditionalCheckFailedException", "message" to "Condition failed")
+        } catch (_: ContentionLimitExceeded) {
+            HttpURLConnection.HTTP_BAD_REQUEST to obj("__type" to "ProvisionedThroughputExceededException",
+                "message" to "Concurrent writes exceeded retry budget")
         } catch (e: ApiError) {
             e.status to obj("__type" to e.code, "message" to e.message.orEmpty())
         } catch (e: Exception) {
@@ -55,10 +64,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                     "CachePeriodInMinutes" to CACHE_MINUTES)))
             }
             "CreateTable" -> tables.create(req)
-            "DescribeTable" -> {
-                req.fieldsOnly("TableName")
-                obj("Table" to tables.describe(Tables.tableName(req)))
-            }
+            "DescribeTable" -> tables.describe(req)
             "DeleteTable" -> tables.delete(req)
             "ListTables" -> tables.list(req)
             "GetItem" -> items.get(req)

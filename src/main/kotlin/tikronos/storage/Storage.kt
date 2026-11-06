@@ -1,6 +1,6 @@
-package tikronos
+package tikronos.storage
 
-import com.fasterxml.jackson.databind.node.ObjectNode
+
 import org.tikv.common.Snapshot
 import org.tikv.common.TiSession
 import org.tikv.common.exception.KeyException
@@ -13,8 +13,8 @@ import org.tikv.txn.exception.WriteConflictException
 internal class Storage(private val session: TiSession) {
     fun snapshot(): Snapshot = session.createSnapshot()
 
-    fun read(snapshot: Snapshot, key: String): ObjectNode? =
-        snapshot.get(key.encodeToByteArray()).takeIf { it.isNotEmpty() }?.let { json.readTree(it) as ObjectNode }
+    fun read(snapshot: Snapshot, key: String): ByteArray? =
+        snapshot.get(key.encodeToByteArray()).takeIf { it.isNotEmpty() }
 
     fun tables(after: String, limit: Int): List<String> {
         val start = CATALOG + after + if (after.isEmpty()) "" else "\u0000"
@@ -24,13 +24,13 @@ internal class Storage(private val session: TiSession) {
     }
 
     // Only retry a rejected prewrite. A commit failure may already have taken effect.
-    fun mutate(key: String, change: (ObjectNode?) -> ObjectNode?): ObjectNode? {
+    fun mutate(key: String, change: (ByteArray?) -> ByteArray?): ByteArray? {
         val bytes = key.encodeToByteArray()
         repeat(MAX_ATTEMPTS) {
             val snapshot = snapshot()
             val old = read(snapshot, key)
-            val value = change(old)?.let(json::writeValueAsBytes) ?: byteArrayOf()
-            TwoPhaseCommitter(session, snapshot.version).use { txn ->
+            val value = change(old) ?: byteArrayOf()
+            TwoPhaseCommitter(session, snapshot.version, LOCK_TTL_MS).use { txn ->
                 val budget = ConcreteBackOffer.newCustomBackOff(BACKOFF_MS)
                 try {
                     txn.prewritePrimaryKey(budget, bytes, value)
@@ -42,7 +42,7 @@ internal class Storage(private val session: TiSession) {
                 return old
             }
         }
-        throw ApiError("ProvisionedThroughputExceededException", "Concurrent writes exceeded retry budget")
+        throw ContentionLimitExceeded()
     }
 
     private fun Throwable.isConflict() = generateSequence(this) { it.cause }.any {
@@ -56,6 +56,10 @@ internal class Storage(private val session: TiSession) {
     companion object {
         const val CATALOG = "tikronos/v1/table/"
         private const val MAX_ATTEMPTS = 8
+        // An abandoned single-key prewrite should clear promptly after the writer dies.
+        private const val LOCK_TTL_MS = 10_000L
         private const val BACKOFF_MS = 3000
     }
 }
+
+internal class ContentionLimitExceeded : RuntimeException()
