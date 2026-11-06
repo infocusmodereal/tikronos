@@ -22,7 +22,8 @@ internal object Records {
 
     fun encodeTable(table: Table): ByteArray {
         val record = mapOf(
-            "name" to table.name, "id" to table.id, "partitionKey" to table.partitionKey, "createdAt" to table.createdAt,
+            "name" to table.name, "id" to table.id, "partitionKey" to table.partitionKey,
+            "createdAt" to table.createdAt,
             "throughput" to table.throughput?.let { mapOf("read" to it.read, "write" to it.write) },
         )
         return byteArrayOf(VERSION) + mapper.writeValueAsBytes(record)
