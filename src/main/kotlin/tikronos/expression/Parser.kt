@@ -1,6 +1,8 @@
 package tikronos.expression
 
 import com.fasterxml.jackson.databind.node.ObjectNode
+import tikronos.codec.parseValue
+import tikronos.codec.wire
 import tikronos.invalid
 import tikronos.model.Value
 import tikronos.obj
@@ -12,7 +14,7 @@ internal class Bindings(req: ObjectNode) {
     private val values =
         if (req.has("ExpressionAttributeValues")) req.obj("ExpressionAttributeValues") else null
     private val usedNames = mutableSetOf<String>()
-    private val usedValues = mutableSetOf<String>()
+    private val usedValues = mutableMapOf<String, Value>()
 
     fun name(s: String): String {
         if (s.startsWith('#')) {
@@ -27,8 +29,7 @@ internal class Bindings(req: ObjectNode) {
 
     fun value(s: String): Value {
         if (s.length == 1) invalid("Empty value alias")
-        usedValues += s
-        return Value.parse(values?.get(s) ?: invalid("Unbound value $s"))
+        return usedValues.getOrPut(s) { parseValue(values?.get(s) ?: invalid("Unbound value $s")) }
     }
 
     fun finish() {
@@ -38,7 +39,7 @@ internal class Bindings(req: ObjectNode) {
             )
         if (values != null && (usedValues.isEmpty() || usedValues.size != values.size()))
             invalid(
-                "Unused ExpressionAttributeValues: ${values.fieldNames().asSequence().toSet() - usedValues}"
+                "Unused ExpressionAttributeValues: ${values.fieldNames().asSequence().toSet() - usedValues.keys}"
             )
     }
 
@@ -53,7 +54,7 @@ internal class Bindings(req: ObjectNode) {
 
 // One production per method keeps the shared grammar and token cursor together.
 @Suppress("TooManyFunctions")
-internal class Parser(source: String, private val env: Bindings) {
+internal class Parser(source: String, private val env: Bindings, private val field: String) {
     private val tokens: List<String>
     private var i = 0
 
@@ -97,9 +98,7 @@ internal class Parser(source: String, private val env: Bindings) {
                 eat("[") -> {
                     val index =
                         next().toIntOrNull()?.takeIf { it >= 0 }
-                            ?: invalid(
-                                "Syntax error in ProjectionExpression or document path: invalid list index"
-                            )
+                            ?: invalid("$field: syntax error, invalid list index")
                     expect("]")
                     parts.add(Step.Index(index))
                 }

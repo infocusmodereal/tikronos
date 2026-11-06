@@ -1,6 +1,8 @@
 package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
+import tikronos.codec.parseItem
+import tikronos.codec.wireItem
 import tikronos.expression.Path
 import tikronos.expression.RequestExpressions
 import tikronos.expression.project
@@ -8,8 +10,6 @@ import tikronos.model.Item
 import tikronos.model.Table
 import tikronos.model.Value
 import tikronos.model.itemSize
-import tikronos.model.parseItem
-import tikronos.model.wireItem
 import tikronos.storage.ContentionLimitExceeded
 import tikronos.storage.Records
 import tikronos.storage.Storage
@@ -79,7 +79,7 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
         if (!entries.isArray || entries.isEmpty || entries.size() > MAX_BATCH_GET)
             invalid("Invalid key count")
         val keys = entries.map { table.key(parseItem(it)) }
-        if (keys.distinct().size != keys.size) invalid("Duplicate batch key")
+        if (keys.distinct().size != keys.size) invalid("BatchGetItem keys contain duplicates")
         return ReadGroup(table, req, keys, paths, req.flag("ConsistentRead"))
     }
 
@@ -96,7 +96,7 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
             requests(req).flatMap { (name, entries) ->
                 val table = tables.find(name)
                 if (!entries.isArray || entries.isEmpty || entries.size() > MAX_BATCH_WRITE)
-                    invalid("Invalid write request count")
+                    invalid("Invalid write request list length")
                 entries.map {
                     prepare(table, it as? ObjectNode ?: invalid("Expected write request"))
                 }
@@ -105,26 +105,14 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
             operations.size > MAX_BATCH_WRITE ||
                 operations.distinctBy { it.address }.size != operations.size
         ) {
-            invalid("BatchWriteItem allows up to $MAX_BATCH_WRITE distinct item keys")
+            invalid(
+                "BatchWriteItem keys contain duplicates or exceed the maximum list length of $MAX_BATCH_WRITE"
+            )
         }
-        val unprocessed = obj()
-        val units = mutableMapOf<String, Double>()
-        for (op in operations) {
-            try {
-                val old = db.mutate(op.address) { op.bytes }?.let(Records::item)
-                units.merge(
-                    op.name,
-                    writeUnits(maxOf(op.size, itemSize(old.orEmpty()))),
-                    Double::plus,
-                )
-            } catch (_: ContentionLimitExceeded) {
-                unprocessed.withArray(op.name).add(op.request)
-            }
-        }
-        return obj("UnprocessedItems" to unprocessed).also { capacity.batch(it, units) }
+        return executeBatch(operations, capacity) { op -> db.mutate(op.address) { op.bytes } }
     }
 
-    private fun prepare(table: Table, request: ObjectNode): Write {
+    private fun prepare(table: Table, request: ObjectNode): BatchWrite {
         request.fieldsOnly("PutRequest", "DeleteRequest")
         if (request.size() != 1) invalid("Expected exactly one write")
         val put = request.has("PutRequest")
@@ -133,7 +121,7 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
         body.fieldsOnly(field)
         val item = parseItem(body.obj(field))
         val key = table.key(item, exact = !put)
-        return Write(
+        return BatchWrite(
             table.name,
             table.address(key),
             request,
@@ -144,14 +132,6 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
 
     private fun requests(req: ObjectNode) =
         req.obj("RequestItems").also { if (it.isEmpty) invalid("Empty batch") }.properties()
-
-    private data class Write(
-        val name: String,
-        val address: String,
-        val request: ObjectNode,
-        val bytes: ByteArray?,
-        val size: Int,
-    )
 
     private data class ReadGroup(
         val table: Table,
@@ -168,3 +148,30 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
 
 private const val MAX_BATCH_GET = 100
 private const val MAX_BATCH_WRITE = 100
+
+internal data class BatchWrite(
+    val name: String,
+    val address: String,
+    val request: ObjectNode,
+    val bytes: ByteArray?,
+    val size: Int,
+)
+
+internal fun executeBatch(
+    operations: List<BatchWrite>,
+    capacity: Capacity,
+    commit: (BatchWrite) -> ByteArray?,
+): ObjectNode {
+    val unprocessed = obj()
+    val units = mutableMapOf<String, Double>()
+    for (op in operations) {
+        try {
+            val old = commit(op)?.let(Records::item)
+            units.merge(op.name, writeUnits(maxOf(op.size, itemSize(old.orEmpty()))), Double::plus)
+        } catch (_: ContentionLimitExceeded) {
+            unprocessed.withArray(op.name).add(op.request)
+        }
+    }
+    if (units.isEmpty()) throw ContentionLimitExceeded()
+    return obj("UnprocessedItems" to unprocessed).also { capacity.batch(it, units) }
+}

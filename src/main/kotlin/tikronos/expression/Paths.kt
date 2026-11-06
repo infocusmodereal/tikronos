@@ -18,19 +18,25 @@ internal data class Path(val root: String, val steps: List<Step> = emptyList()) 
                 is Step.Index -> value?.takeIf { it.type == "L" }?.entries()?.getOrNull(step.index)
             }
         }
+}
 
-    fun overlaps(other: Path) =
-        root == other.root && steps.zip(other.steps).all { (a, b) -> a == b }
+private class PathNode {
+    var leaf = false
+    val children = mutableMapOf<Step, PathNode>()
 }
 
 internal fun validatePaths(paths: List<Path>) {
-    for ((index, path) in paths.withIndex()) {
-        for (prior in paths.take(index).filter { it.root == path.root }) {
-            if (path.overlaps(prior)) invalid("Document paths overlap")
-            val divergence = path.steps.zip(prior.steps).first { (a, b) -> a != b }
-            if (divergence.first::class != divergence.second::class)
-                invalid("Document paths conflict")
+    val roots = mutableMapOf<String, PathNode>()
+    for (path in paths) {
+        var node = roots.getOrPut(path.root, ::PathNode)
+        for (step in path.steps) {
+            if (node.leaf) invalid("Document paths overlap")
+            val sibling = node.children.keys.firstOrNull()
+            if (sibling != null && sibling::class != step::class) invalid("Document paths conflict")
+            node = node.children.getOrPut(step, ::PathNode)
         }
+        if (node.leaf || node.children.isNotEmpty()) invalid("Document paths overlap")
+        node.leaf = true
     }
 }
 

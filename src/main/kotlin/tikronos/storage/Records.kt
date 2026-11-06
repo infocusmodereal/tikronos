@@ -2,12 +2,12 @@ package tikronos.storage
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.json.JsonMapper
+import tikronos.codec.parseItem
+import tikronos.codec.wireItem
 import tikronos.model.Item
 import tikronos.model.Table
 import tikronos.model.Throughput
 import tikronos.model.Value
-import tikronos.model.parseItem
-import tikronos.model.wireItem
 
 /** A leading version byte distinguishes compact records from the original JSON documents. */
 internal object Records {

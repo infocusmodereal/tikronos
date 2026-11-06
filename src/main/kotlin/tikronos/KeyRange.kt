@@ -16,7 +16,7 @@ internal fun Table.queryRange(predicate: Predicate?): KeyRange {
     val checks = flatten(predicate).map { it.keyFirst() }.associateByUniqueKey()
     val hash = checks[partitionKey] ?: invalid("Key condition missed partition key $partitionKey")
     if (hash.op != "=" || checks.keys.any { it != partitionKey && it != sortKey })
-        invalid("Key condition operator not supported")
+        invalid("KeyConditionExpression key operator not supported")
     val partition = hash.literal(1, partitionType)
     validateKeyValue(partition, partitionType, true)
     val prefix = partitionPrefix(partition)
@@ -57,7 +57,8 @@ private fun flatten(p: Predicate?): List<Predicate.Check> =
     when (p) {
         is Predicate.Check -> listOf(p)
         is Predicate.Junction ->
-            if (p.and) p.children.flatMap(::flatten) else invalid("OR is invalid on keys")
+            if (p.and) p.children.flatMap(::flatten)
+            else invalid("OR is invalid in KeyConditionExpression")
         else -> invalid("Expected KeyConditionExpression or KeyConditions")
     }
 

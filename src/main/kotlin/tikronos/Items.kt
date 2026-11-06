@@ -1,6 +1,8 @@
 package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
+import tikronos.codec.parseItem
+import tikronos.codec.wireItem
 import tikronos.expression.Action
 import tikronos.expression.RequestExpressions
 import tikronos.expression.patch
@@ -8,10 +10,9 @@ import tikronos.expression.paths
 import tikronos.expression.project
 import tikronos.model.ConditionFailed
 import tikronos.model.Item
+import tikronos.model.MAX_DEPTH
 import tikronos.model.MAX_ITEM_BYTES
 import tikronos.model.itemSize
-import tikronos.model.parseItem
-import tikronos.model.wireItem
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.address
@@ -142,6 +143,7 @@ internal class Items(private val db: Storage, private val tables: Tables) {
 }
 
 internal fun encodeChecked(item: Item): ByteArray {
+    if (item.values.any { it.depth > MAX_DEPTH }) invalid("Document exceeds maximum nesting depth")
     if (itemSize(item) > MAX_ITEM_BYTES) invalid("Item exceeds 400 KiB")
     return Records.encodeItem(item)
 }

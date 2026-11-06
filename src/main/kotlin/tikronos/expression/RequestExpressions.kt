@@ -1,9 +1,9 @@
 package tikronos.expression
 
 import com.fasterxml.jackson.databind.node.ObjectNode
+import tikronos.codec.parseValue
 import tikronos.fieldsOnly
 import tikronos.invalid
-import tikronos.model.Value
 import tikronos.obj
 import tikronos.string
 
@@ -20,7 +20,7 @@ internal class RequestExpressions(private val req: ObjectNode) {
 
     fun predicate(field: String, old: String): Predicate? =
         when {
-            req.has(field) -> Parser(req.string(field), bindings).predicate()
+            req.has(field) -> Parser(req.string(field), bindings, field).predicate()
             req.has(old) -> {
                 val all =
                     req.obj(old).properties().map { (name, node) ->
@@ -45,7 +45,8 @@ internal class RequestExpressions(private val req: ObjectNode) {
     fun projection(): List<Path>? =
         when {
             req.has("ProjectionExpression") ->
-                Parser(req.string("ProjectionExpression"), bindings).projection()
+                Parser(req.string("ProjectionExpression"), bindings, "ProjectionExpression")
+                    .projection()
             req.has("AttributesToGet") -> {
                 val names = req.path("AttributesToGet")
                 if (!names.isArray || names.isEmpty) invalid("Expected attribute names")
@@ -64,12 +65,12 @@ internal class RequestExpressions(private val req: ObjectNode) {
     fun updates(): List<Action> =
         when {
             req.has("UpdateExpression") ->
-                Parser(req.string("UpdateExpression"), bindings).updates()
+                Parser(req.string("UpdateExpression"), bindings, "UpdateExpression").updates()
             req.has("AttributeUpdates") ->
                 req.obj("AttributeUpdates").properties().map { (name, node) ->
                     node.fieldsOnly("Action", "Value")
                     val op = if (node.has("Action")) node.string("Action") else "PUT"
-                    val v = node.get("Value")?.let { Operand.Literal(Value.parse(it)) }
+                    val v = node.get("Value")?.let { Operand.Literal(parseValue(it)) }
                     when {
                         op == "DELETE" && v == null -> Action("REMOVE", Path(name), null)
                         op == "ADD" && v?.value?.type == "L" -> Action("APPEND", Path(name), v)
@@ -124,7 +125,7 @@ private fun legacyCheck(name: String, node: ObjectNode, expected: Boolean): Pred
     val op = node.string("ComparisonOperator")
     val raw = node.get("AttributeValueList")
     if (raw != null && !raw.isArray) invalid("Invalid AttributeValueList")
-    val values = raw?.toList().orEmpty().map { Operand.Literal(Value.parse(it)) }
+    val values = raw?.toList().orEmpty().map { Operand.Literal(parseValue(it)) }
     validateLegacyTypes(op, values)
     val count =
         when (op) {
@@ -170,7 +171,7 @@ private fun legacyExpected(node: ObjectNode, attr: Operand): Predicate {
     val exists = node.path("Exists").asBoolean(true)
     if (exists != node.has("Value")) invalid("Invalid Expected value")
     return if (exists)
-        Predicate.Check("=", listOf(attr, Operand.Literal(Value.parse(node["Value"]))))
+        Predicate.Check("=", listOf(attr, Operand.Literal(parseValue(node["Value"]))))
     else Predicate.Check("attribute_not_exists", listOf(attr))
 }
 

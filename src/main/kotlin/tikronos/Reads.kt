@@ -2,6 +2,8 @@ package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
 import org.tikv.shade.com.google.protobuf.ByteString
+import tikronos.codec.parseItem
+import tikronos.codec.wireItem
 import tikronos.expression.Path
 import tikronos.expression.RequestExpressions
 import tikronos.expression.paths
@@ -9,8 +11,6 @@ import tikronos.expression.project
 import tikronos.model.Item
 import tikronos.model.Table
 import tikronos.model.itemSize
-import tikronos.model.parseItem
-import tikronos.model.wireItem
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.address

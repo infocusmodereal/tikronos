@@ -7,8 +7,8 @@ import java.net.HttpURLConnection
 import java.util.UUID
 import java.util.logging.Level
 import java.util.logging.Logger
+import tikronos.codec.wireItem
 import tikronos.model.ConditionFailed
-import tikronos.model.wireItem
 import tikronos.storage.ContentionLimitExceeded
 import tikronos.storage.Storage
 
