@@ -6,7 +6,12 @@ internal data class Table(
     val partitionKey: String,
     val createdAt: Long,
     val throughput: Throughput?,
+    val partitionType: String = "S",
+    val sortKey: String? = null,
+    val sortType: String? = null,
+    val hashed: Boolean = false,
+    val indexes: List<Index> = emptyList(),
+    val tags: Map<String, String> = emptyMap(),
 )
 
 internal data class Throughput(val read: Long, val write: Long)
-internal typealias Item = Map<String, String>
