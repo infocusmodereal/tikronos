@@ -1,0 +1,18 @@
+services:
+  pd:
+    image: pingcap/pd:v8.5.3
+    volumes: ["pd-data:/data"]
+    command: ["--data-dir=/data/pd", "--name=pd", "--client-urls=http://0.0.0.0:2379", "--advertise-client-urls=http://127.0.0.1:2379", "--peer-urls=http://127.0.0.1:2380", "--initial-cluster=pd=http://127.0.0.1:2380"]
+    ports:
+      - "127.0.0.1:2379:2379"
+      - "127.0.0.1:20160:20160"
+  tikv:
+    image: pingcap/tikv:v8.5.3
+    network_mode: service:pd
+    ulimits:
+      nofile: 262144
+    volumes: ["tikv-data:/data"]
+    command: ["--data-dir=/data/tikv", "--pd=127.0.0.1:2379", "--addr=0.0.0.0:20160", "--advertise-addr=127.0.0.1:20160"]
+volumes:
+  pd-data:
+  tikv-data:

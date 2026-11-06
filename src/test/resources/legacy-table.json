@@ -1,0 +1,1 @@
+{"TableName":"Locksfaa4b023","TableStatus":"ACTIVE","TableId":"82227b81-a1b1-4a08-9bca-896c334304aa","KeySchema":[{"AttributeName":"id","KeyType":"HASH"}],"AttributeDefinitions":[{"AttributeName":"id","AttributeType":"S"}],"CreationDateTime":1793923808,"ProvisionedThroughput":{"ReadCapacityUnits":2,"WriteCapacityUnits":3}}

@@ -1,0 +1,35 @@
+name: Kotlin checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - run: ./gradlew check installDist
+      - name: Verify concurrent lock acquisition on TiKV
+        run: |
+          docker compose -f integration/compose.yaml up -d
+          for attempt in {1..60}; do
+            if curl -fsS http://127.0.0.1:2379/pd/api/v1/stores | jq -e 'any(.stores[]?; .store.state_name == "Up")'; then
+              break
+            fi
+            if [ "$attempt" = 60 ]; then
+              docker compose -f integration/compose.yaml logs --tail 100
+              exit 1
+            fi
+            sleep 1
+          done
+          build/install/tikronos/bin/tikronos &
+          server=$!
+          trap 'kill "$server" || true; docker compose -f integration/compose.yaml down -v' EXIT
+          python3 integration/lock.py
