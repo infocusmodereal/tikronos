@@ -19,6 +19,8 @@ import tikronos.storage.address
 import tikronos.storage.key
 
 internal class Items(private val db: Storage, private val tables: Tables) {
+    private val writer = ItemWriter(db)
+
     fun get(req: ObjectNode): ObjectNode {
         req.fieldsOnly(
             "TableName",
@@ -62,15 +64,12 @@ internal class Items(private val db: Storage, private val tables: Tables) {
         if (onFailure !in setOf("NONE", "ALL_OLD"))
             invalid("Invalid ReturnValuesOnConditionCheckFailure")
         val capacity = Capacity(req)
-        var written: Item? = null
-        val previous =
-            db.mutate(table.address(key)) { bytes ->
-                    val old = bytes?.let(Records::item)
+        val result =
+            writer.mutate(table, key) { old ->
                     if (condition?.matches(old.orEmpty()) == false) {
                         throw ConditionFailed(old.takeIf { onFailure == "ALL_OLD" })
                     }
-                    written =
-                        when (operation) {
+                    when (operation) {
                             "PutItem" -> input
                             "UpdateItem" -> {
                                 updated(old, key, actions)
@@ -78,15 +77,13 @@ internal class Items(private val db: Storage, private val tables: Tables) {
                             "DeleteItem" -> null
                             else -> error("Unknown write")
                         }
-                    written?.let(::encodeChecked)
                 }
-                ?.let(Records::item)
         return obj().apply {
-            addReturned(returns, previous, written, actions)
+            addReturned(returns, result.old, result.new, actions)
             capacity.add(
                 this,
                 table.name,
-                writeUnits(maxOf(itemSize(previous.orEmpty()), itemSize(written.orEmpty()))),
+                writeCapacity(result.table, result.old, result.new),
             )
         }
     }

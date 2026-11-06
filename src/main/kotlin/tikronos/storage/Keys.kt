@@ -79,7 +79,7 @@ private fun uintHex(value: Long) = HexFormat.of().toHexDigits(value.toInt())
 internal fun Table.segmentEdge(segment: Int, total: Int): ByteString {
     return when (segment) {
         0 -> bytes(prefix())
-        total -> bytes(prefix().dropLast(1) + "0")
+        total -> prefixEnd(prefix())
         else -> interiorEdge(segment, total)
     }
 }

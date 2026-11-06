@@ -16,6 +16,11 @@ internal val byteOrder = ByteString.unsignedLexicographicalComparator()
 
 internal fun bytes(value: String): ByteString = ByteString.copyFromUtf8(value)
 
+internal fun prefixEnd(prefix: String): ByteString {
+    require(prefix.endsWith('/')) { "Expected a namespace prefix" }
+    return bytes(prefix.dropLast(1) + "0")
+}
+
 internal fun after(key: ByteString): ByteString = key.concat(ZERO)
 
 private val ZERO = ByteString.copyFrom(byteArrayOf(0))
@@ -31,9 +36,12 @@ internal class RangeReader(private val session: TiSession) {
     private val codec
         get() = session.pdClient.codec
 
-    fun scan(first: ByteString, end: ByteString, forward: Boolean): Sequence<Kvrpcpb.KvPair> =
+    fun scan(
+        first: ByteString, end: ByteString, forward: Boolean,
+        snapshot: Snapshot = session.createSnapshot(),
+    ): Sequence<Kvrpcpb.KvPair> =
         sequence {
-            val snap = session.createSnapshot()
+            val snap = snapshot
             var low = first
             var high = end
             while (byteOrder.compare(low, high) < 0) {

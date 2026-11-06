@@ -14,6 +14,9 @@ import tikronos.storage.Storage
 
 internal class Dynamo(db: Storage, private val signature: Signature?) {
     private val tables = Tables(db)
+    private val catalog = Catalog(db)
+    private val streams = StreamReads(db)
+    private val ttl = Ttl(db)
     private val items = Items(db, tables)
     private val reads = Reads(db, tables)
     private val batches = Batches(db, tables)
@@ -66,14 +69,28 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
         }
         signature?.verify(exchange.requestHeaders, body)
         val target = exchange.requestHeaders.getFirst("X-Amz-Target").orEmpty()
-        if (!target.startsWith(PREFIX)) unknown()
+        val prefix = when {
+            target.startsWith(PREFIX) -> PREFIX
+            target.startsWith(STREAM_PREFIX) -> STREAM_PREFIX
+            else -> unknown()
+        }
         val req =
             try {
                 json.readTree(body) as? ObjectNode ?: invalid("Expected a JSON object")
             } catch (_: JsonProcessingException) {
                 throw ApiError("SerializationException", "Invalid JSON")
             }
-        return dispatch(target.removePrefix(PREFIX), req, exchange)
+        val operation = target.removePrefix(prefix)
+        return if (prefix == STREAM_PREFIX) dispatchStream(operation, req)
+        else dispatch(operation, req, exchange)
+    }
+
+    private fun dispatchStream(operation: String, req: ObjectNode): ObjectNode = when (operation) {
+        "ListStreams" -> streams.list(req)
+        "DescribeStream" -> streams.describe(req)
+        "GetShardIterator" -> streams.iterator(req)
+        "GetRecords" -> streams.records(req)
+        else -> unknown()
     }
 
     private fun dispatch(operation: String, req: ObjectNode, exchange: HttpExchange): ObjectNode =
@@ -90,10 +107,9 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                         )
                 )
             }
-            "CreateTable" -> tables.create(req)
-            "DescribeTable" -> tables.describe(req)
-            "DeleteTable" -> tables.delete(req)
-            "ListTables" -> tables.list(req)
+            "CreateTable", "DescribeTable", "DeleteTable", "ListTables", "UpdateTable",
+            "UpdateTimeToLive", "DescribeTimeToLive", "TagResource", "UntagResource",
+            "ListTagsOfResource", "DescribeContinuousBackups" -> dispatchCatalog(operation, req)
             "Query",
             "Scan" -> reads.read(req, operation == "Query")
             "BatchGetItem" -> batches.get(req)
@@ -105,9 +121,23 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
             else -> unknown()
         }
 
+    private fun dispatchCatalog(operation: String, req: ObjectNode): ObjectNode = when (operation) {
+            "CreateTable" -> tables.create(req)
+            "DescribeTable" -> tables.describe(req)
+            "DeleteTable" -> tables.delete(req)
+            "UpdateTable" -> tables.update(req)
+            "UpdateTimeToLive" -> ttl.update(req)
+            "DescribeTimeToLive" -> ttl.describe(req)
+            "TagResource", "UntagResource", "ListTagsOfResource" -> catalog.tags(req, operation)
+            "DescribeContinuousBackups" -> catalog.backups(req)
+            "ListTables" -> tables.list(req)
+        else -> unknown()
+    }
+
     companion object {
         private const val CACHE_MINUTES = 60
         private const val PREFIX = "DynamoDB_20120810."
+        private const val STREAM_PREFIX = "DynamoDBStreams_20120810."
         private const val MAX_BODY = 16 * 1024 * 1024
         private val logger = Logger.getLogger(Dynamo::class.java.name)
 

@@ -6,11 +6,14 @@ import tikronos.model.Table
 import tikronos.model.Throughput
 import tikronos.model.attributeName
 
-internal fun keySchema(req: ObjectNode): List<Pair<String, String>> {
+internal fun keySchema(
+    req: ObjectNode,
+    definitions: JsonNode = req.path("AttributeDefinitions"),
+): List<Pair<String, String>> {
     val keys = req.path("KeySchema")
-    val defs = req.path("AttributeDefinitions")
+    val defs = definitions
     if (!keys.isArray || keys.size() !in 1..2) invalid("Invalid key schema")
-    if (!defs.isArray || defs.size() != keys.size()) invalid("Invalid attribute definitions")
+    if (!defs.isArray || defs.isEmpty) invalid("Invalid attribute definitions")
     val types =
         defs.associate {
             it.fieldsOnly("AttributeName", "AttributeType")
@@ -18,6 +21,7 @@ internal fun keySchema(req: ObjectNode): List<Pair<String, String>> {
             if (type !in setOf("S", "N", "B")) invalid("Invalid key type")
             it.string("AttributeName") to type
         }
+    if (types.size != defs.size()) invalid("Duplicate attribute definition")
     val schema =
         keys.map {
             it.fieldsOnly("AttributeName", "KeyType")
@@ -62,6 +66,7 @@ private fun JsonNode.capacity(field: String): Long =
 internal fun description(table: Table) =
     obj(
             "TableName" to table.name,
+            "TableArn" to tableArn(table),
             "TableStatus" to "ACTIVE",
             "TableId" to table.id,
             "CreationDateTime" to table.createdAt,
@@ -71,20 +76,18 @@ internal fun description(table: Table) =
                     table.sortKey?.let { obj("AttributeName" to it, "KeyType" to "RANGE") },
                 ),
             "AttributeDefinitions" to
-                listOfNotNull(
-                    obj(
-                        "AttributeName" to table.partitionKey,
-                        "AttributeType" to table.partitionType,
-                    ),
-                    table.sortKey?.let {
-                        obj(
-                            "AttributeName" to it,
-                            "AttributeType" to requireNotNull(table.sortType),
-                        )
-                    },
-                ),
+                definitions(table).map { (name, type) ->
+                    obj("AttributeName" to name, "AttributeType" to type)
+                },
         )
         .apply {
+            for (local in listOf(false, true)) {
+                val indexes = table.indexes.filter { it.local == local }
+                if (indexes.isNotEmpty()) set<ObjectNode>(
+                    if (local) "LocalSecondaryIndexes" else "GlobalSecondaryIndexes",
+                    json.valueToTree(indexes.map { indexDescription(table, it) }),
+                )
+            }
             table.throughput?.let {
                 set<ObjectNode>(
                     "ProvisionedThroughput",
@@ -94,3 +97,15 @@ internal fun description(table: Table) =
         }
 
 private const val MAX_KEY_NAME_BYTES = 255
+
+internal fun tableArn(table: Table): String =
+    "arn:aws:dynamodb:${System.getenv("TIKRONOS_REGION") ?: "us-east-1"}:000000000000:table/${table.name}"
+
+internal fun definitions(table: Table): Map<String, String> = buildMap {
+    put(table.partitionKey, table.partitionType)
+    table.sortKey?.let { put(it, requireNotNull(table.sortType)) }
+    table.indexes.forEach {
+        put(it.partitionKey, it.partitionType)
+        it.sortKey?.let { name -> put(name, requireNotNull(it.sortType)) }
+    }
+}

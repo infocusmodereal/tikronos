@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.json.JsonMapper
 import tikronos.codec.parseItem
 import tikronos.codec.wireItem
+import tikronos.model.Index
 import tikronos.model.Item
 import tikronos.model.Table
 import tikronos.model.Throughput
@@ -27,6 +28,13 @@ internal object Records {
         }
     }
 
+    fun itemAt(table: Table, address: String, bytes: ByteArray): Item {
+        val item = item(bytes)
+        val key = table.key(item, exact = false)
+        check(table.address(key) == address) { "Stored item primary key does not match its address" }
+        return item
+    }
+
     fun encodeTable(table: Table): ByteArray {
         val record =
             mapOf(
@@ -36,6 +44,8 @@ internal object Records {
                 "createdAt" to table.createdAt,
                 "partitionType" to table.partitionType,
                 "hashed" to table.hashed,
+                "indexes" to table.indexes,
+                "tags" to table.tags,
                 "sortKey" to table.sortKey,
                 "sortType" to table.sortType,
                 "throughput" to
@@ -72,9 +82,23 @@ internal object Records {
                 node.path("sortKey").textValue(),
                 node.path("sortType").textValue(),
                 node.path("hashed").asBoolean(false),
+                node.path("indexes").map(::index),
+                node.path("tags").properties().associate { it.key to it.value.textValue() },
             )
         }
     }
+
+    private fun index(node: JsonNode) = Index(
+        node["name"].textValue(), node["id"].textValue(),
+        node["partitionKey"].textValue(), node["partitionType"].textValue(),
+        node.path("sortKey").textValue(), node.path("sortType").textValue(),
+        node.path("local").asBoolean(), node.path("projection").asText("ALL"),
+        node.path("attributes").map(JsonNode::textValue),
+        node.path("throughput").takeUnless { it.isNull || it.isMissingNode }?.let {
+            Throughput(it["read"].longValue(), it["write"].longValue())
+        },
+        node.path("status").asText("ACTIVE"), node.path("cursor").textValue(),
+    )
 
     private fun decode(bytes: ByteArray): Pair<Boolean, JsonNode> =
         when (bytes.first()) {

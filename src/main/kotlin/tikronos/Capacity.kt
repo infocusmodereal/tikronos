@@ -2,6 +2,12 @@ package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlin.math.max
+import tikronos.model.CapacityUnits
+import tikronos.model.Item
+import tikronos.model.Table
+import tikronos.model.itemSize
+import tikronos.storage.existingEntry
+import tikronos.storage.projected
 
 internal class Capacity(req: ObjectNode) {
     private val mode =
@@ -11,22 +17,54 @@ internal class Capacity(req: ObjectNode) {
         if (mode !in setOf("TOTAL", "INDEXES", "NONE")) invalid("Invalid ReturnConsumedCapacity")
     }
 
-    fun entry(table: String, units: Double): ObjectNode =
-        obj("TableName" to table, "CapacityUnits" to units).apply {
-            if (mode == "INDEXES") set<ObjectNode>("Table", obj("CapacityUnits" to units))
+    private fun entry(table: String, usage: CapacityUnits): ObjectNode =
+        obj("TableName" to table, "CapacityUnits" to usage.total).apply {
+            if (mode == "INDEXES") {
+                set<ObjectNode>("Table", obj("CapacityUnits" to usage.table))
+                if (usage.local.isNotEmpty()) set<ObjectNode>("LocalSecondaryIndexes", breakdown(usage.local))
+                if (usage.global.isNotEmpty()) set<ObjectNode>("GlobalSecondaryIndexes", breakdown(usage.global))
+            }
         }
 
-    fun add(response: ObjectNode, table: String, units: Double) {
-        if (mode != "NONE") response.set<ObjectNode>("ConsumedCapacity", entry(table, units))
+    private fun breakdown(units: Map<String, Double>): ObjectNode =
+        json.valueToTree(units.mapValues { obj("CapacityUnits" to it.value) })
+
+    fun add(response: ObjectNode, table: String, units: Double) = add(response, table, CapacityUnits(units))
+
+    fun add(response: ObjectNode, table: String, usage: CapacityUnits) {
+        if (mode != "NONE") response.set<ObjectNode>("ConsumedCapacity", entry(table, usage))
     }
 
-    fun batch(response: ObjectNode, units: Map<String, Double>) {
-        if (mode != "NONE")
-            response.set<ObjectNode>(
-                "ConsumedCapacity",
-                json.valueToTree(units.map { entry(it.key, it.value) }),
-            )
+    fun batch(response: ObjectNode, units: Map<String, Double>) =
+        batchUsage(response, units.mapValues { CapacityUnits(it.value) })
+
+    fun batchUsage(response: ObjectNode, units: Map<String, CapacityUnits>) {
+        if (mode != "NONE") response.set<ObjectNode>(
+            "ConsumedCapacity", json.valueToTree(units.map { entry(it.key, it.value) }))
     }
+
+}
+
+internal fun writeCapacity(table: Table, old: Item?, new: Item?): CapacityUnits {
+    val indexes = table.indexes.associateWith { index ->
+        val before = old?.let { index.existingEntry(table, it) }
+        val after = new?.let { index.existingEntry(table, it) }
+        val projected = index.projected(table)
+        fun attributes(item: Item?) = item?.filterKeys { projected == null || it in projected }
+        val previous = old?.takeIf { before != null }?.let(::attributes)
+        val next = new?.takeIf { after != null }?.let(::attributes)
+        when {
+            previous == next -> 0.0
+            before != null && after != null && before != after ->
+                writeUnits(itemSize(previous.orEmpty())) + writeUnits(itemSize(next.orEmpty()))
+            else -> writeUnits(maxOf(itemSize(previous.orEmpty()), itemSize(next.orEmpty())))
+        }
+    }.filterValues { it > 0 }
+    return CapacityUnits(
+        writeUnits(maxOf(itemSize(old.orEmpty()), itemSize(new.orEmpty()))),
+        indexes.filterKeys { it.local }.mapKeys { it.key.name },
+        indexes.filterKeys { !it.local }.mapKeys { it.key.name },
+    )
 }
 
 internal fun readUnits(bytes: Int, strong: Boolean) =
