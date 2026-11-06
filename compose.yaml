@@ -1,0 +1,34 @@
+name: tikronos
+services:
+  api:
+    build: .
+    environment:
+      TIKRONOS_PD: pd:2379
+      TIKRONOS_ACCESS_KEY: local
+      TIKRONOS_SECRET_KEY: local-development-only
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      pd:
+        condition: service_healthy
+      tikv:
+        condition: service_started
+    stop_grace_period: 60s
+  pd:
+    image: pingcap/pd:v8.5.3
+    command: ["--name=pd", "--data-dir=/data", "--client-urls=http://0.0.0.0:2379", "--advertise-client-urls=http://pd:2379", "--peer-urls=http://0.0.0.0:2380", "--advertise-peer-urls=http://pd:2380", "--initial-cluster=pd=http://pd:2380"]
+    volumes: ["pd-data:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:2379/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  tikv:
+    image: pingcap/tikv:v8.5.3
+    command: ["--pd=pd:2379", "--addr=0.0.0.0:20160", "--advertise-addr=tikv:20160", "--data-dir=/data"]
+    ulimits:
+      nofile: 262144
+    volumes: ["tikv-data:/data"]
+    depends_on: [pd]
+volumes:
+  pd-data:
+  tikv-data:

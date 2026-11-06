@@ -9,6 +9,7 @@ import indexes
 import items
 import lifecycle
 import lock
+import transport
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,7 +37,7 @@ class Server:
         if self.process is not None:
             self.process.terminate()
             try:
-                self.process.wait(timeout=30)
+                self.process.wait(timeout=60)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=10)
@@ -56,9 +57,11 @@ def main():
     try:
         server.start()
         lock.main()
+        transport.exercise()
         items.exercise()
         indexes.exercise(restart=server.restart)
         lifecycle.exercise()
+        transport.drain(server.process)
     finally:
         server.stop()
     print("PASS HTTP checks and JVM restart during CREATING index backfill", flush=True)

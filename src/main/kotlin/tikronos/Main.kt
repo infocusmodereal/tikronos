@@ -1,28 +1,21 @@
 package tikronos
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
-import java.net.HttpURLConnection
+import io.ktor.server.application.ApplicationCallPipeline
+import io.ktor.server.application.call
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.engine.connector
+import io.ktor.server.netty.Netty
 import java.net.InetSocketAddress
 import java.net.URI
-import tikronos.storage.Storage
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
-
-private fun HttpExchange.reply(status: Int, text: String, allow: String? = null) {
-    val bytes = text.toByteArray(Charsets.UTF_8)
-    responseHeaders.set("Content-Type", "text/plain; charset=utf-8")
-    if (allow != null) responseHeaders.set("Allow", allow)
-    if (requestMethod == "HEAD") {
-        responseHeaders.set("Content-Length", bytes.size.toString())
-        sendResponseHeaders(status, -1)
-    } else {
-        sendResponseHeaders(status, bytes.size.toLong())
-        responseBody.write(bytes)
-    }
-}
+import tikronos.storage.Storage
 
 private fun addressArgument(args: Array<String>): String = when {
     args.isEmpty() -> "127.0.0.1:8000"
@@ -53,7 +46,10 @@ private fun signature(): Signature? {
     return access?.let { Signature(it, requireNotNull(secret), System.getenv("TIKRONOS_REGION") ?: "us-east-1") }
 }
 
+@Suppress("TooGenericExceptionCaught") // Startup must release resources when bind or engine initialization fails.
 fun main(args: Array<String>) {
+    // Own shutdown ordering: Ktor's independent JVM hook would close sockets before our drain.
+    System.setProperty("io.ktor.server.engine.ShutdownHook", "false")
     val bind = listenAddress(args)
     val signature = signature()
     require(signature != null || bind.address?.isLoopbackAddress == true) {
@@ -61,45 +57,78 @@ fun main(args: Array<String>) {
     }
     val session = TiSession.create(TiConfiguration.createDefault(System.getenv("TIKRONOS_PD") ?: "127.0.0.1:2379"))
     val storage = Storage(session)
-    val api = Dynamo(storage, signature)
     val maintenance = Maintenance(storage)
-    val server = HttpServer.create(bind, 0)
-    val workers = Executors.newFixedThreadPool(WORKERS)
-    server.executor = workers
-    Runtime.getRuntime().addShutdownHook(Thread {
-        server.stop(1)
-        workers.shutdown()
+    val workers = Executors.newFixedThreadPool(HTTP_STORAGE_WORKERS)
+    val dispatcher = workers.asCoroutineDispatcher()
+    val api = HttpApi(Dynamo(storage, signature), dispatcher)
+    val server = embeddedServer(Netty, configure = {
+        connector { host = bind.hostString; port = bind.port }
+        connectionGroupSize = 1
+        workerGroupSize = 2
+        callGroupSize = 2
+        shutdownGracePeriod = GRACE_MS
+        shutdownTimeout = DRAIN_MS
+    }) {
+        intercept(ApplicationCallPipeline.Call) {
+            api.handle(call)
+            finish()
+        }
+    }
+    val shutdown = Thread {
         try {
-            workers.awaitTermination(DRAIN_SECONDS, TimeUnit.SECONDS)
+            runBlocking { api.drain(DRAIN_MS) }
         } finally {
             try {
-                maintenance.close()
+                server.stop(GRACE_MS, DRAIN_MS)
             } finally {
-                session.close()
+                closeResources(workers, maintenance, dispatcher, session)
             }
         }
-    })
-    server.createContext("/") { exchange -> exchange.use { route(it, api) } }
-    server.start()
-    maintenance.start()
+    }
+    Runtime.getRuntime().addShutdownHook(shutdown)
+    try {
+        server.start(wait = false)
+        maintenance.start()
+    } catch (error: Exception) {
+        cleanupStartup(shutdown, error)
+        throw error
+    }
 }
 
-private fun route(exchange: HttpExchange, api: Dynamo) {
-    with(exchange) {
-        when (requestURI.rawPath) {
-            "/healthz" -> when (requestMethod) {
-                "GET", "HEAD" -> reply(HttpURLConnection.HTTP_OK, "ok\n")
-                else -> reply(HttpURLConnection.HTTP_BAD_METHOD, "Method Not Allowed\n", "GET, HEAD")
-            }
-            "/" -> when (requestMethod) {
-                "POST" -> api.handle(this)
-                else -> reply(HttpURLConnection.HTTP_BAD_METHOD, "Method Not Allowed\n", "POST")
-            }
-            else -> reply(HttpURLConnection.HTTP_NOT_FOUND, "404 page not found\n")
+@Suppress("TooGenericExceptionCaught") // Preserve the startup error if cleanup also fails.
+private fun cleanupStartup(shutdown: Thread, error: Exception) {
+    try {
+        shutdown.run()
+    } catch (cleanup: Exception) {
+        error.addSuppressed(cleanup)
+    } finally {
+        try {
+            Runtime.getRuntime().removeShutdownHook(shutdown)
+        } catch (stopping: IllegalStateException) {
+            error.addSuppressed(stopping)
+        }
+    }
+}
+
+private fun closeResources(
+    workers: ExecutorService,
+    maintenance: Maintenance,
+    dispatcher: ExecutorCoroutineDispatcher,
+    session: TiSession,
+) {
+    workers.shutdown()
+    try {
+        if (!workers.awaitTermination(DRAIN_MS, TimeUnit.MILLISECONDS)) workers.shutdownNow()
+    } finally {
+        try {
+            maintenance.close()
+        } finally {
+            dispatcher.close()
+            session.close()
         }
     }
 }
 
 private const val MAX_PORT = 65535
-private const val DRAIN_SECONDS = 10L
-private const val WORKERS = 8
+private const val GRACE_MS = 1000L
+private const val DRAIN_MS = 10_000L

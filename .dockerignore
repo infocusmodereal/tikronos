@@ -1,0 +1,11 @@
+*
+!Dockerfile
+!gradlew
+!build.gradle.kts
+!settings.gradle.kts
+!gradle/
+!gradle/wrapper/
+!gradle/wrapper/*
+!src/
+!src/**
+!LICENSE
