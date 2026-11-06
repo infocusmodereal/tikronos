@@ -9,6 +9,8 @@ services:
   tikv:
     image: pingcap/tikv:v8.5.3
     network_mode: service:pd
+    ulimits:
+      nofile: 262144
     volumes: ["tikv-data:/data"]
     command: ["--data-dir=/data/tikv", "--pd=127.0.0.1:2379", "--addr=0.0.0.0:20160", "--advertise-addr=127.0.0.1:20160"]
 volumes:
