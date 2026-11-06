@@ -1,6 +1,7 @@
 """Verify wire behavior changed by the HTTP engine, without changing DynamoDB fixtures."""
 import http.client
 import json
+import select
 import socket
 import time
 
@@ -38,20 +39,33 @@ def exercise():
     # Eight stalled uploads still leave room for a complete request.
     held = []
     try:
-        for index in range(16):
+        for index in range(17):
             conn = socket.create_connection(("127.0.0.1", 8000), timeout=5)
             held.append(conn)
-            length = 16 * 1024 * 1024 if index < 2 else 100
+            length = 16 * 1024 * 1024 if index < 2 else 4096
             conn.sendall(f"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: {length}\r\n\r\nx".encode())
             if index == 7:
                 assert request("POST", "/", b"{}", headers)[0] == 200
         deadline = time.monotonic() + 5
+        # A complete probe could steal a slot before the final upload is admitted.
+        # Instead, one of these seventeen incomplete requests must be rejected.
         while True:
-            status, _, body = request("POST", "/", b"{}", headers)
-            if status == 400 and json.loads(body)["__type"] == "ProvisionedThroughputExceededException":
+            ready, _, _ = select.select(held, [], [], .1)
+            if ready:
+                rejected = ready[0]
+                response = http.client.HTTPResponse(rejected)
+                response.begin()
+                assert response.status == 400, response.status
+                assert json.load(response)["__type"] == "ProvisionedThroughputExceededException"
+                held.remove(rejected)
+                rejected.close()
                 break
             assert time.monotonic() < deadline, "Admission was not bounded"
-            time.sleep(.05)
+            for conn in held:
+                try:
+                    conn.sendall(b" ")
+                except OSError:
+                    pass  # Read the server's rejection on the next iteration.
         oversized = {**headers, "Content-Length": str(16 * 1024 * 1024 + 1)}
         assert request("POST", "/", headers=oversized)[0] == 413
         assert request("GET", "/healthz")[0] == 200
