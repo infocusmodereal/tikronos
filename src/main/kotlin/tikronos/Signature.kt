@@ -1,6 +1,6 @@
 package tikronos
 
-import com.sun.net.httpserver.Headers
+import tikronos.protocol.RequestHeaders
 import java.security.MessageDigest
 import java.time.Duration
 import java.time.Instant
@@ -12,19 +12,15 @@ import javax.crypto.spec.SecretKeySpec
 
 /** SigV4 for the single DynamoDB POST / endpoint (no query, permanent credentials). */
 internal class Signature(private val access: String, private val secret: String, private val region: String) {
-    fun verify(headers: Headers, body: ByteArray, now: Instant = Instant.now()) {
-        val auth = authorization.matchEntire(headers.getFirst("Authorization").orEmpty()) ?: denied()
+    fun verify(headers: RequestHeaders, body: ByteArray, now: Instant = Instant.now()) {
+        val auth = validateHeaders(headers, now)
         val day = auth.groups["day"]!!.value
         val names = auth.groups["names"]!!.value
         val signature = auth.groups["signature"]!!.value
-        val date = headers.getFirst("X-Amz-Date") ?: denied()
-        if (auth.groups["id"]!!.value != access || auth.groups["region"]!!.value != region) denied()
-        if (!date.startsWith(day) || headers.containsKey("X-Amz-Security-Token")) denied()
-        validateTime(date, now)
+        val date = headers.first("X-Amz-Date") ?: denied()
         val signed = names.split(';')
-        if (signed != signed.distinct().sorted() || !signed.containsAll(required)) denied()
         val hash = sha256(body)
-        if (headers.getFirst("X-Amz-Content-Sha256")?.let { it != hash } == true) denied()
+        if (headers.first("X-Amz-Content-Sha256")?.let { it != hash } == true) denied()
         val canonicalHeaders = signed.joinToString("\n") { name ->
             val values = headers[name] ?: denied()
             "$name:" + values.joinToString(",") { it.trim().replace(whitespace, " ") }
@@ -34,6 +30,18 @@ internal class Signature(private val access: String, private val secret: String,
         val toSign = "AWS4-HMAC-SHA256\n$date\n$scope\n" + sha256(canonical.encodeToByteArray())
         val key = scope.split('/').fold(("AWS4" + secret).encodeToByteArray(), ::hmac)
         if (!MessageDigest.isEqual(hmac(key, toSign), HexFormat.of().parseHex(signature))) denied()
+    }
+
+    fun validateHeaders(headers: RequestHeaders, now: Instant = Instant.now()): MatchResult {
+        val auth = authorization.matchEntire(headers.first("Authorization").orEmpty()) ?: denied()
+        val date = headers.first("X-Amz-Date") ?: denied()
+        val day = auth.groups["day"]!!.value
+        if (auth.groups["id"]!!.value != access || auth.groups["region"]!!.value != region) denied()
+        if (!date.startsWith(day) || headers.contains("X-Amz-Security-Token")) denied()
+        validateTime(date, now)
+        val signed = auth.groups["names"]!!.value.split(';')
+        if (signed != signed.distinct().sorted() || !signed.containsAll(required)) denied()
+        return auth
     }
 
     private fun validateTime(date: String, now: Instant) {

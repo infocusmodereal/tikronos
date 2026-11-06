@@ -2,9 +2,10 @@ package tikronos
 
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.node.ObjectNode
-import com.sun.net.httpserver.HttpExchange
+import tikronos.protocol.DynamoRequest
+import tikronos.protocol.DynamoResponse
+import tikronos.protocol.RequestHeaders
 import java.net.HttpURLConnection
-import java.util.UUID
 import java.util.logging.Level
 import java.util.logging.Logger
 import tikronos.codec.wireItem
@@ -21,15 +22,15 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
     private val reads = Reads(db, tables)
     private val batches = Batches(db, tables)
 
+    fun validateHeaders(headers: RequestHeaders) { signature?.validateHeaders(headers) }
+
     @Suppress(
         "TooGenericExceptionCaught"
     ) // HTTP boundary: log unexpected failures and return an SDK-readable error.
-    fun handle(exchange: HttpExchange) {
-        exchange.responseHeaders.set("x-amzn-RequestId", UUID.randomUUID().toString())
-        exchange.responseHeaders.set("Content-Type", "application/x-amz-json-1.0")
+    fun handle(input: DynamoRequest): DynamoResponse {
         val response =
             try {
-                HttpURLConnection.HTTP_OK to request(exchange)
+                HttpURLConnection.HTTP_OK to request(input)
             } catch (e: ConditionFailed) {
                 HttpURLConnection.HTTP_BAD_REQUEST to
                     obj(
@@ -52,14 +53,12 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                 HttpURLConnection.HTTP_INTERNAL_ERROR to
                     obj("__type" to "InternalServerError", "message" to "Storage request failed")
             }
-        val bytes = json.writeValueAsBytes(response.second)
-        exchange.sendResponseHeaders(response.first, bytes.size.toLong())
-        exchange.responseBody.write(bytes)
+        return DynamoResponse(response.first, json.writeValueAsBytes(response.second))
     }
 
-    private fun request(exchange: HttpExchange): ObjectNode {
-        if (exchange.requestURI.rawQuery != null) invalid("Unexpected query parameters")
-        val body = exchange.requestBody.readNBytes(MAX_BODY + 1)
+    private fun request(input: DynamoRequest): ObjectNode {
+        if (input.hasQuery) invalid("Unexpected query parameters")
+        val body = input.body
         if (body.size > MAX_BODY) {
             throw ApiError(
                 "RequestEntityTooLarge",
@@ -67,8 +66,8 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                 HttpURLConnection.HTTP_ENTITY_TOO_LARGE,
             )
         }
-        signature?.verify(exchange.requestHeaders, body)
-        val target = exchange.requestHeaders.getFirst("X-Amz-Target").orEmpty()
+        signature?.verify(input.headers, body)
+        val target = input.headers.first("X-Amz-Target").orEmpty()
         val prefix = when {
             target.startsWith(PREFIX) -> PREFIX
             target.startsWith(STREAM_PREFIX) -> STREAM_PREFIX
@@ -82,7 +81,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
             }
         val operation = target.removePrefix(prefix)
         return if (prefix == STREAM_PREFIX) dispatchStream(operation, req)
-        else dispatch(operation, req, exchange)
+        else dispatch(operation, req, input)
     }
 
     private fun dispatchStream(operation: String, req: ObjectNode): ObjectNode = when (operation) {
@@ -93,7 +92,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
         else -> unknown()
     }
 
-    private fun dispatch(operation: String, req: ObjectNode, exchange: HttpExchange): ObjectNode =
+    private fun dispatch(operation: String, req: ObjectNode, input: DynamoRequest): ObjectNode =
         when (operation) {
             "DescribeEndpoints" -> {
                 req.fieldsOnly()
@@ -101,9 +100,8 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                     "Endpoints" to
                         listOf(
                             obj(
-                                "Address" to exchange.requestHeaders.getFirst("Host"),
                                 "CachePeriodInMinutes" to CACHE_MINUTES,
-                            )
+                            ).apply { put("Address", input.headers.first("Host")) }
                         )
                 )
             }
@@ -138,7 +136,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
         private const val CACHE_MINUTES = 60
         private const val PREFIX = "DynamoDB_20120810."
         private const val STREAM_PREFIX = "DynamoDBStreams_20120810."
-        private const val MAX_BODY = 16 * 1024 * 1024
+        const val MAX_BODY = 16 * 1024 * 1024
         private val logger = Logger.getLogger(Dynamo::class.java.name)
 
         private fun unknown(): Nothing =

@@ -1,5 +1,5 @@
 plugins {
-    kotlin("jvm") version "2.2.21"
+    kotlin("jvm") version "2.3.21"
     id("io.gitlab.arturbosch.detekt") version "1.23.8"
     application
 }
@@ -9,15 +9,22 @@ repositories {
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
 }
 
 application {
     mainClass.set("tikronos.MainKt")
 }
 
+distributions {
+    main {
+        contents { from("LICENSE") }
+    }
+}
+
 dependencies {
-    runtimeOnly("org.slf4j:slf4j-jdk14:1.7.36")
+    implementation("io.ktor:ktor-server-netty:3.6.1")
+    runtimeOnly("org.slf4j:slf4j-jdk14:2.0.19")
     implementation("org.tikv:tikv-client-java:3.3.5")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.21.7")
     testImplementation(kotlin("test-junit5"))

@@ -6,7 +6,7 @@ TiKronos takes its name from TiKV and a play on Chronos and Kronos (Cronus), the
 
 ## Run locally
 
-With JDK 17 and a running TiKV cluster, point TiKronos at its PD endpoint:
+With JDK 21 and a running TiKV cluster, point TiKronos at its PD endpoint:
 
 ```sh
 TIKRONOS_PD=127.0.0.1:2379 ./gradlew run
@@ -15,6 +15,31 @@ TIKRONOS_PD=127.0.0.1:2379 ./gradlew run
 The HTTP endpoint defaults to `127.0.0.1:8000`. Loopback supports unsigned requests for development. To verify SigV4, set `TIKRONOS_ACCESS_KEY`, `TIKRONOS_SECRET_KEY` and optionally `TIKRONOS_REGION` (default `us-east-1`). Other listen addresses require credentials. Use a TLS terminator for remote access. Run `./gradlew check` for static analysis and unit tests.
 
 When upgrading a cluster that ran an earlier pre-release, stop all old instances before starting the new ones. The service reads existing records and writes a versioned format. Rolling back after the first write requires restoring a pre-upgrade backup.
+
+## Container and distribution
+
+TiKronos is a standalone Kotlin service using Ktor with Netty. Clients use the DynamoDB HTTP endpoint; PD and TiKV run separately. Blocking TiKV calls run on dedicated threads, with eight storage calls and sixteen incoming bodies admitted at a time. Body reads allow three seconds of inactivity and thirty seconds total, with a shared 64 MiB raw-buffer budget. Completed bodies wait up to five seconds for a storage worker. Excess requests receive a retryable throttling response before execution. Shutdown rejects new requests and drains admitted requests for up to ten seconds before stopping the HTTP engine.
+
+For a single-node development environment:
+
+```sh
+docker compose up --build -d
+```
+
+Use endpoint `http://localhost:8000`, region `us-east-1`, access key `local` and secret `local-development-only`. These credentials are for this loopback-only example. PD and TiKV ports stay inside the Compose network. Startup may take a moment before storage is available. `GET /healthz` is a process liveness check, not a storage readiness check. Stop with `docker compose down`; named volumes retain data.
+
+To connect to an existing cluster, build the image and provide credentials through your environment:
+
+```sh
+docker build -t tikronos:local .
+docker run --rm --memory 2g -p 127.0.0.1:8000:8000 --stop-timeout 60 \
+  -e TIKRONOS_PD -e TIKRONOS_ACCESS_KEY -e TIKRONOS_SECRET_KEY \
+  tikronos:local
+```
+
+The container runs as UID 10001 on Java 21, with root-owned application files. Its heap defaults to 70% of the container memory limit, and the JVM exits on heap exhaustion. Override `JAVA_OPTS` to tune this; JSON parsing and native buffers also need memory. PD and every advertised TiKV address must be reachable from the container; `localhost` refers to the container itself. TLS termination remains external. Images are built locally; no registry release is published yet.
+
+For a host with Java 21, `./gradlew installDist` creates `build/install/tikronos/bin/tikronos` and its libraries. `./gradlew distTar distZip` produces portable distributions under `build/distributions`.
 
 ## DynamoDB compatibility
 
