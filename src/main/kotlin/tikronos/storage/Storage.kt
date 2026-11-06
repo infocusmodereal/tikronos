@@ -31,14 +31,14 @@ internal class Storage(private val session: TiSession) {
             val old = read(snapshot, key)
             val value = change(old) ?: byteArrayOf()
             TwoPhaseCommitter(session, snapshot.version, LOCK_TTL_MS).use { txn ->
-                val budget = ConcreteBackOffer.newCustomBackOff(BACKOFF_MS)
+                val prewriteBudget = ConcreteBackOffer.newCustomBackOff(BACKOFF_MS)
                 try {
-                    txn.prewritePrimaryKey(budget, bytes, value)
+                    txn.prewritePrimaryKey(prewriteBudget, bytes, value)
                 } catch (error: TiBatchWriteException) {
                     if (!error.isConflict()) throw error
                     return@repeat
                 }
-                txn.commitPrimaryKey(budget, bytes, session.timestamp.version)
+                txn.commitPrimaryKey(ConcreteBackOffer.newCustomBackOff(BACKOFF_MS), bytes, session.timestamp.version)
                 return old
             }
         }
@@ -54,7 +54,9 @@ internal class Storage(private val session: TiSession) {
         keyErr?.hasConflict() == true || message.orEmpty().startsWith("retryable:")
 
     companion object {
-        const val CATALOG = "tikronos/v1/table/"
+        private const val PREFIX = "tikronos/v1/"
+        const val CATALOG = "${PREFIX}table/"
+        fun itemKey(id: String, value: String) = "${PREFIX}item/$id/$value"
         private const val MAX_ATTEMPTS = 8
         // An abandoned single-key prewrite should clear promptly after the writer dies.
         private const val LOCK_TTL_MS = 10_000L

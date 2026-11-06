@@ -12,6 +12,8 @@ class RecordsTest {
             "KeySchema" to listOf(obj("AttributeName" to "id", "KeyType" to "HASH")))
         val table = Table("Locks", "123", "id", 1, null)
         assertEquals(table, Records.table(json.writeValueAsBytes(old)))
+        val v1 = """{"name":"Locks","id":"123","partitionKey":"id","createdAt":1,"throughput":null}"""
+        assertEquals(table, Records.table(byteArrayOf(1) + v1.encodeToByteArray()))
         assertEquals(table, Records.table(Records.encodeTable(table)))
         val item = mapOf("id" to "state", "Info" to "old-owner")
         assertEquals(item, Records.item("""{"id":{"S":"state"},"Info":{"S":"old-owner"}}""".encodeToByteArray()))

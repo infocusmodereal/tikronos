@@ -23,7 +23,10 @@ jobs:
             if curl -fsS http://127.0.0.1:2379/pd/api/v1/stores | jq -e 'any(.stores[]?; .store.state_name == "Up")'; then
               break
             fi
-            if [ "$attempt" = 60 ]; then exit 1; fi
+            if [ "$attempt" = 60 ]; then
+              docker compose -f integration/compose.yaml logs --tail 100
+              exit 1
+            fi
             sleep 1
           done
           build/install/tikronos/bin/tikronos &

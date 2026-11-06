@@ -12,7 +12,7 @@ internal class Items(private val db: Storage, private val tables: Tables) {
         req.fieldsOnly("TableName", "Key", "ConsistentRead", "ProjectionExpression", "ExpressionAttributeNames")
         if (req.has("ConsistentRead") && !req["ConsistentRead"].isBoolean) invalid("Expected boolean ConsistentRead")
         val table = tables.find(Tables.tableName(req))
-        val key = table.itemKey(partitionValue(keyAttributes(req), table.partitionKey))
+        val key = Storage.itemKey(table.id, partitionValue(keyAttributes(req), table.partitionKey))
         val names = AttributeNames(req)
         val fields = if (req.has("ProjectionExpression")) {
             req.string("ProjectionExpression").split(',').map { names.resolve(it.trim()) }
@@ -28,7 +28,7 @@ internal class Items(private val db: Storage, private val tables: Tables) {
         req.fieldsOnly("TableName", field, "ConditionExpression", "ExpressionAttributeNames", "ReturnValues")
         val table = tables.find(Tables.tableName(req))
         val attributes = if (put) req.obj(field) else keyAttributes(req)
-        val key = table.itemKey(partitionValue(attributes, table.partitionKey))
+        val key = Storage.itemKey(table.id, partitionValue(attributes, table.partitionKey))
         val returns = if (req.has("ReturnValues")) req.string("ReturnValues") else "NONE"
         if (returns !in setOf("NONE", "ALL_OLD")) invalid("Invalid ReturnValues")
         val change = ItemWrite(condition(req, table.partitionKey), if (put) item(attributes) else null)
