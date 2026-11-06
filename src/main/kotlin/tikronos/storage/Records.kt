@@ -5,49 +5,82 @@ import com.fasterxml.jackson.databind.json.JsonMapper
 import tikronos.model.Item
 import tikronos.model.Table
 import tikronos.model.Throughput
+import tikronos.model.Value
+import tikronos.model.parseItem
+import tikronos.model.wireItem
 
 /** A leading version byte distinguishes compact records from the original JSON documents. */
 internal object Records {
     private val mapper = JsonMapper()
-    private const val VERSION: Byte = 1
+    private const val STRING_VERSION: Byte = 1
+    private const val TYPED_VERSION: Byte = 2
 
-    fun encodeItem(item: Item): ByteArray = byteArrayOf(VERSION) + mapper.writeValueAsBytes(item)
+    fun encodeItem(item: Item): ByteArray =
+        byteArrayOf(TYPED_VERSION) + mapper.writeValueAsBytes(wireItem(item))
 
     fun item(bytes: ByteArray): Item {
+        if (bytes.first() == TYPED_VERSION)
+            return parseItem(mapper.readTree(bytes.inputStream(1, bytes.size - 1)))
         val (legacy, record) = decode(bytes)
         return record.properties().associate { (name, value) ->
-            name to checkNotNull((if (legacy) value["S"] else value).textValue())
+            name to Value.text(checkNotNull((if (legacy) value["S"] else value).textValue()))
         }
     }
 
     fun encodeTable(table: Table): ByteArray {
-        val record = mapOf(
-            "name" to table.name, "id" to table.id, "partitionKey" to table.partitionKey,
-            "createdAt" to table.createdAt,
-            "throughput" to table.throughput?.let { mapOf("read" to it.read, "write" to it.write) },
-        )
-        return byteArrayOf(VERSION) + mapper.writeValueAsBytes(record)
+        val record =
+            mapOf(
+                "name" to table.name,
+                "id" to table.id,
+                "partitionKey" to table.partitionKey,
+                "createdAt" to table.createdAt,
+                "partitionType" to table.partitionType,
+                "hashed" to table.hashed,
+                "sortKey" to table.sortKey,
+                "sortType" to table.sortType,
+                "throughput" to
+                    table.throughput?.let { mapOf("read" to it.read, "write" to it.write) },
+            )
+        return byteArrayOf(TYPED_VERSION) + mapper.writeValueAsBytes(record)
     }
 
     fun table(bytes: ByteArray): Table {
         val (legacy, node) = decode(bytes)
         return if (legacy) {
-            Table(node["TableName"].textValue(), node["TableId"].textValue(),
+            Table(
+                node["TableName"].textValue(),
+                node["TableId"].textValue(),
                 node["KeySchema"][0]["AttributeName"].textValue(),
-                node["CreationDateTime"].longValue(), node["ProvisionedThroughput"]?.let {
-                    Throughput(it["ReadCapacityUnits"].longValue(), it["WriteCapacityUnits"].longValue())
-                })
+                node["CreationDateTime"].longValue(),
+                node["ProvisionedThroughput"]?.let {
+                    Throughput(
+                        it["ReadCapacityUnits"].longValue(),
+                        it["WriteCapacityUnits"].longValue(),
+                    )
+                },
+            )
         } else {
-            Table(node["name"].textValue(), node["id"].textValue(), node["partitionKey"].textValue(),
-                node["createdAt"].longValue(), node["throughput"].takeUnless(JsonNode::isNull)?.let {
+            Table(
+                node["name"].textValue(),
+                node["id"].textValue(),
+                node["partitionKey"].textValue(),
+                node["createdAt"].longValue(),
+                node["throughput"].takeUnless(JsonNode::isNull)?.let {
                     Throughput(it["read"].longValue(), it["write"].longValue())
-                })
+                },
+                node.path("partitionType").asText("S"),
+                node.path("sortKey").textValue(),
+                node.path("sortType").textValue(),
+                node.path("hashed").asBoolean(false),
+            )
         }
     }
 
-    private fun decode(bytes: ByteArray): Pair<Boolean, JsonNode> = when (bytes.first()) {
-        '{'.code.toByte() -> true to mapper.readTree(bytes)
-        VERSION -> false to mapper.readTree(bytes.inputStream(1, bytes.size - 1))
-        else -> error("Unknown record version")
-    }
+    private fun decode(bytes: ByteArray): Pair<Boolean, JsonNode> =
+        when (bytes.first()) {
+            '{'.code.toByte() -> true to mapper.readTree(bytes)
+            STRING_VERSION,
+            TYPED_VERSION -> false to mapper.readTree(bytes.inputStream(1, bytes.size - 1))
+            else -> error("Unknown record version")
+        }
 }

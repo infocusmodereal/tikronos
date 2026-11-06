@@ -1,86 +1,147 @@
 package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
-import tikronos.model.Condition
+import tikronos.expression.Action
+import tikronos.expression.RequestExpressions
+import tikronos.expression.patch
+import tikronos.expression.paths
+import tikronos.expression.project
+import tikronos.model.ConditionFailed
 import tikronos.model.Item
-import tikronos.model.ItemWrite
+import tikronos.model.MAX_ITEM_BYTES
+import tikronos.model.itemSize
+import tikronos.model.parseItem
+import tikronos.model.wireItem
 import tikronos.storage.Records
 import tikronos.storage.Storage
+import tikronos.storage.address
+import tikronos.storage.key
 
 internal class Items(private val db: Storage, private val tables: Tables) {
     fun get(req: ObjectNode): ObjectNode {
-        req.fieldsOnly("TableName", "Key", "ConsistentRead", "ProjectionExpression", "ExpressionAttributeNames")
-        if (req.has("ConsistentRead") && !req["ConsistentRead"].isBoolean) invalid("Expected boolean ConsistentRead")
+        req.fieldsOnly(
+            "TableName",
+            "Key",
+            "ConsistentRead",
+            "ProjectionExpression",
+            "ExpressionAttributeNames",
+            "AttributesToGet",
+            "ReturnConsumedCapacity",
+        )
         val table = tables.find(Tables.tableName(req))
-        val key = Storage.itemKey(table.id, partitionValue(keyAttributes(req), table.partitionKey))
-        val names = AttributeNames(req)
-        val fields = if (req.has("ProjectionExpression")) {
-            req.string("ProjectionExpression").split(',').map { names.resolve(it.trim()) }
-        } else null
-        names.finish()
-        if (fields != null && fields.distinct().size != fields.size) invalid("Overlapping projection paths")
-        val item = db.read(db.snapshot(), key)?.let(Records::item) ?: return obj()
-        return obj("Item" to wire(if (fields == null) item else item.filterKeys { it in fields }))
-    }
-
-    fun write(req: ObjectNode, put: Boolean): ObjectNode {
-        val field = if (put) "Item" else "Key"
-        req.fieldsOnly("TableName", field, "ConditionExpression", "ExpressionAttributeNames", "ReturnValues")
-        val table = tables.find(Tables.tableName(req))
-        val attributes = if (put) req.obj(field) else keyAttributes(req)
-        val key = Storage.itemKey(table.id, partitionValue(attributes, table.partitionKey))
-        val returns = if (req.has("ReturnValues")) req.string("ReturnValues") else "NONE"
-        if (returns !in setOf("NONE", "ALL_OLD")) invalid("Invalid ReturnValues")
-        val change = ItemWrite(condition(req, table.partitionKey), if (put) item(attributes) else null)
-        val old = db.mutate(key) { bytes -> change.apply(bytes?.let(Records::item))?.let(Records::encodeItem) }
-        return if (returns == "ALL_OLD" && old != null) obj("Attributes" to wire(Records.item(old))) else obj()
-    }
-
-    private fun condition(req: ObjectNode, hash: String): Condition {
-        val names = AttributeNames(req)
-        val condition = if (req.has("ConditionExpression")) {
-            val match = absent.matchEntire(req.string("ConditionExpression").trim())
-                ?: invalid("Expected attribute_not_exists(partitionKey)")
-            if (names.resolve(match.groupValues[1]) != hash) invalid("Condition must reference the partition key")
-            Condition.KEY_ABSENT
-        } else Condition.UNCONDITIONAL
-        names.finish()
-        return condition
-    }
-
-    private fun wire(item: Item) = item.mapValues { (_, value) -> obj("S" to value) }
-
-    private fun item(attributes: ObjectNode): Item {
-        var size = 0
-        return attributes.properties().associate { (name, attribute) ->
-            if (name.isEmpty() || attribute.size() != 1) invalid("Expected a named string attribute")
-            val value = attribute.string("S")
-            size += utf8Size(name) + utf8Size(value)
-            if (size > MAX_ITEM_BYTES) invalid("Item exceeds 400 KiB")
-            name to value
+        val key = table.key(parseItem(req.obj("Key")))
+        val expressions = RequestExpressions(req)
+        val paths = expressions.projection()
+        expressions.finish()
+        val strong = req.flag("ConsistentRead")
+        val capacity = Capacity(req)
+        val item = db.read(db.snapshot(), table.address(key))?.let(Records::item)
+        return obj().apply {
+            if (item != null)
+                set<ObjectNode>("Item", json.valueToTree(wireItem(project(item, paths))))
+            capacity.add(this, table.name, readUnits(itemSize(item.orEmpty()), strong))
         }
     }
 
-    private fun keyAttributes(req: ObjectNode) = req.obj("Key").also {
-        if (it.size() != 1) invalid("Expected one partition key")
+    fun write(req: ObjectNode, operation: String): ObjectNode {
+        val put = operation == "PutItem"
+        val update = operation == "UpdateItem"
+        val field = if (put) "Item" else "Key"
+        req.writeFields(field, update)
+        val table = tables.find(Tables.tableName(req))
+        val input = parseItem(req.obj(field))
+        val key = table.key(input, exact = !put)
+        val expressions = RequestExpressions(req)
+        val condition = expressions.predicate("ConditionExpression", "Expected")
+        val actions = expressions.updates()
+        if (actions.any { it.path.root in key }) invalid("Cannot update a key attribute")
+        expressions.finish()
+        val returns = req.returnMode(update)
+        val onFailure = req.path("ReturnValuesOnConditionCheckFailure").asText("NONE")
+        if (onFailure !in setOf("NONE", "ALL_OLD"))
+            invalid("Invalid ReturnValuesOnConditionCheckFailure")
+        val capacity = Capacity(req)
+        var written: Item? = null
+        val previous =
+            db.mutate(table.address(key)) { bytes ->
+                    val old = bytes?.let(Records::item)
+                    if (condition?.matches(old.orEmpty()) == false) {
+                        throw ConditionFailed(old.takeIf { onFailure == "ALL_OLD" })
+                    }
+                    written =
+                        when (operation) {
+                            "PutItem" -> input
+                            "UpdateItem" -> {
+                                updated(old, key, actions)
+                            }
+                            "DeleteItem" -> null
+                            else -> error("Unknown write")
+                        }
+                    written?.let(::encodeChecked)
+                }
+                ?.let(Records::item)
+        return obj().apply {
+            addReturned(returns, previous, written, actions)
+            capacity.add(
+                this,
+                table.name,
+                writeUnits(maxOf(itemSize(previous.orEmpty()), itemSize(written.orEmpty()))),
+            )
+        }
     }
 
-    private fun partitionValue(attributes: ObjectNode, hash: String): String {
-        val attribute = attributes.obj(hash)
-        val value = attribute.string("S")
-        if (attribute.size() != 1 || utf8Size(value) !in 1..MAX_KEY_BYTES) invalid("Invalid partition key")
-        return value
+    private fun updated(old: Item?, key: Item, actions: List<Action>): Item? {
+        val base = old ?: key
+        val changes = actions.associate { it.path to it.evaluate(base) }
+        if (old == null && actions.isNotEmpty() && changes.values.all { it == null }) return null
+        return patch(base, changes)
     }
 
-    private fun utf8Size(value: String): Int {
-        val bytes = value.encodeToByteArray()
-        if (bytes.decodeToString() != value) invalid("Invalid Unicode string")
-        return bytes.size
+    private fun ObjectNode.writeFields(field: String, update: Boolean) {
+        val allowed =
+            listOf(
+                "TableName",
+                field,
+                "ConditionExpression",
+                "ExpressionAttributeNames",
+                "Expected",
+                "ExpressionAttributeValues",
+                "ConditionalOperator",
+                "ReturnValues",
+                "ReturnConsumedCapacity",
+                "ReturnValuesOnConditionCheckFailure",
+            )
+        fieldsOnly(
+            if (update) allowed + listOf("AttributeUpdates", "UpdateExpression") else allowed
+        )
     }
 
-    companion object {
-        private const val MAX_ITEM_BYTES = 400 * 1024
-        private const val MAX_KEY_BYTES = 2048
-        private val absent = Regex("""attribute_not_exists\s*\(\s*(#?[a-zA-Z0-9_]+)\s*\)""")
+    private fun ObjectNode.addReturned(
+        returns: String,
+        previous: Item?,
+        written: Item?,
+        actions: List<Action>,
+    ) {
+        val state = if (returns.endsWith("OLD")) previous else written
+        if (returns != "NONE" && state != null) {
+            val result =
+                if (returns.startsWith("UPDATED")) project(state, actions.map(Action::path))
+                else state
+            if (result.isNotEmpty())
+                set<ObjectNode>("Attributes", json.valueToTree(wireItem(result)))
+        }
     }
+
+    private fun ObjectNode.returnMode(update: Boolean): String {
+        val mode = if (has("ReturnValues")) string("ReturnValues") else "NONE"
+        val allowed =
+            if (update) setOf("NONE", "ALL_OLD", "ALL_NEW", "UPDATED_OLD", "UPDATED_NEW")
+            else setOf("NONE", "ALL_OLD")
+        return mode.takeIf { it in allowed } ?: invalid("Invalid ReturnValues")
+    }
+}
+
+internal fun encodeChecked(item: Item): ByteArray {
+    if (itemSize(item) > MAX_ITEM_BYTES) invalid("Item exceeds 400 KiB")
+    return Records.encodeItem(item)
 }

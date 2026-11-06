@@ -18,6 +18,8 @@ When upgrading a cluster that ran an earlier pre-release, stop all old instances
 
 ## DynamoDB compatibility
 
-The initial API supports endpoint discovery, table create/describe/list/delete, and item put/get/delete. Tables have one string partition key and items contain string attributes. Reads support top-level projections. Writes support `attribute_not_exists` on the partition key and `ALL_OLD`. Dropping a table retires its storage namespace; physical reclamation is pending.
+TiKronos supports table management, endpoint discovery, item CRUD, Query, Scan, BatchGetItem and BatchWriteItem. Partition and optional sort keys accept strings, numbers or binary data. Items can also contain booleans, nulls, documents and sets. Conditions, updates, filters and projections share expression evaluation. Item writes re-evaluate conditions against TiKV after a write conflict.
+
+Query and Scan return up to 1 MiB before filtering. Forward and reverse queries read bounded TiKV ranges at a single snapshot per request. Parallel Scan assigns each worker a disjoint key range. Batch requests accept up to 100 item keys or writes. Retry the entries returned in UnprocessedKeys or UnprocessedItems. Dropping a table retires its storage namespace; physical reclamation is pending.
 
 For Terraform's S3 backend, point the DynamoDB endpoint at TiKronos and create a table with a string key named `LockID`. The state file stays in object storage. Terraform has deprecated DynamoDB-based locking. [Backend documentation](https://developer.hashicorp.com/terraform/language/backend/s3).

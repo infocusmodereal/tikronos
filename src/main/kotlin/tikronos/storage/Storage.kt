@@ -1,12 +1,10 @@
 package tikronos.storage
 
-
 import org.tikv.common.Snapshot
 import org.tikv.common.TiSession
 import org.tikv.common.exception.KeyException
 import org.tikv.common.exception.TiBatchWriteException
 import org.tikv.common.util.ConcreteBackOffer
-import org.tikv.shade.com.google.protobuf.ByteString
 import org.tikv.txn.TwoPhaseCommitter
 import org.tikv.txn.exception.WriteConflictException
 
@@ -16,11 +14,15 @@ internal class Storage(private val session: TiSession) {
     fun read(snapshot: Snapshot, key: String): ByteArray? =
         snapshot.get(key.encodeToByteArray()).takeIf { it.isNotEmpty() }
 
+    val ranges = RangeReader(session)
+
     fun tables(after: String, limit: Int): List<String> {
         val start = CATALOG + after + if (after.isEmpty()) "" else "\u0000"
-        return snapshot().scan(ByteString.copyFromUtf8(start)).asSequence()
-            .map { it.key.toStringUtf8() }.takeWhile { it.startsWith(CATALOG) }
-            .map { it.removePrefix(CATALOG) }.take(limit).toList()
+        return ranges
+            .scan(bytes(start), bytes(CATALOG.dropLast(1) + "0"), forward = true)
+            .map { it.key.toStringUtf8().removePrefix(CATALOG) }
+            .take(limit)
+            .toList()
     }
 
     // Only retry a rejected prewrite. A commit failure may already have taken effect.
@@ -38,16 +40,20 @@ internal class Storage(private val session: TiSession) {
                     if (!error.isConflict()) throw error
                     return@repeat
                 }
-                txn.commitPrimaryKey(ConcreteBackOffer.newCustomBackOff(BACKOFF_MS), bytes, session.timestamp.version)
+                txn.commitPrimaryKey(
+                    ConcreteBackOffer.newCustomBackOff(BACKOFF_MS),
+                    bytes,
+                    session.timestamp.version,
+                )
                 return old
             }
         }
         throw ContentionLimitExceeded()
     }
 
-    private fun Throwable.isConflict() = generateSequence(this) { it.cause }.any {
-        it is WriteConflictException || it is KeyException && it.isRetryablePrewrite()
-    }
+    private fun Throwable.isConflict() =
+        generateSequence(this) { it.cause }
+            .any { it is WriteConflictException || it is KeyException && it.isRetryablePrewrite() }
 
     // Client 3.3.5 flattens some prewrite KeyError protobufs into exception messages.
     private fun KeyException.isRetryablePrewrite() =
@@ -56,7 +62,9 @@ internal class Storage(private val session: TiSession) {
     companion object {
         private const val PREFIX = "tikronos/v1/"
         const val CATALOG = "${PREFIX}table/"
+
         fun itemKey(id: String, value: String) = "${PREFIX}item/$id/$value"
+
         private const val MAX_ATTEMPTS = 8
         // An abandoned single-key prewrite should clear promptly after the writer dies.
         private const val LOCK_TTL_MS = 10_000L

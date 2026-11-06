@@ -1,3 +1,5 @@
 .gradle/
 .kotlin/
 build/
+
+__pycache__/

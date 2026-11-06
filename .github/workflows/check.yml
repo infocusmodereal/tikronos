@@ -33,3 +33,4 @@ jobs:
           server=$!
           trap 'kill "$server" || true; docker compose -f integration/compose.yaml down -v' EXIT
           python3 integration/lock.py
+          python3 integration/items.py
