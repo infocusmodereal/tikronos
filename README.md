@@ -16,11 +16,11 @@ TIKRONOS_PD=127.0.0.1:2379 ./gradlew run
 
 The HTTP endpoint defaults to `127.0.0.1:8000`. Loopback supports unsigned requests for development. To verify SigV4, set `TIKRONOS_ACCESS_KEY`, `TIKRONOS_SECRET_KEY` and optionally `TIKRONOS_REGION` (default `us-east-1`). Other listen addresses require credentials. Use a TLS terminator for remote access. Run `./gradlew check` for static analysis and unit tests.
 
-When upgrading a cluster that ran an earlier pre-release, stop all old instances before starting the new ones. The service reads existing records and writes a versioned format. Rolling back after the first write requires restoring a pre-upgrade backup.
+When upgrading a cluster that ran an earlier pre-release, stop all old instances before starting the new ones. The metadata validation protocol cannot safely mix old and new writers. The service reads existing records and writes a versioned format. Rolling back after the first write requires restoring a pre-upgrade backup.
 
 ## Container and distribution
 
-TiKronos is a standalone Kotlin service using Ktor with Netty. Clients use the DynamoDB HTTP endpoint; PD and TiKV run separately. Blocking TiKV calls run on dedicated threads, with eight storage calls and sixteen incoming bodies admitted at a time. Body reads allow three seconds of inactivity and thirty seconds total, with a shared 64 MiB raw-buffer budget. Completed bodies wait up to five seconds for a storage worker. Excess requests receive a retryable throttling response before execution. Shutdown rejects new requests and drains admitted requests for up to ten seconds before stopping the HTTP engine.
+TiKronos is a standalone Kotlin service using Ktor with Netty. Clients use the DynamoDB HTTP endpoint; PD and TiKV run separately. Blocking TiKV calls run on dedicated threads, with eight workers per available CPU (up to 128 by default) and twice as many admitted requests. Set `TIKRONOS_STORAGE_WORKERS` and `TIKRONOS_MAX_REQUESTS` to override these bounds. Body reads allow three seconds of inactivity and thirty seconds total, with a shared 64 MiB raw-buffer budget. Completed bodies wait up to five seconds for a storage worker. Excess requests receive a retryable throttling response before execution. Shutdown rejects new requests and drains admitted requests for up to ten seconds before stopping the HTTP engine.
 
 For a single-node development environment:
 
@@ -51,6 +51,6 @@ Query and Scan return up to 1 MiB before filtering. Forward and reverse queries 
 
 Global and local secondary indexes support sparse keys and projections. New global indexes backfill in bounded batches with persistent checkpoints before becoming ACTIVE. TTL indexes expiration candidates and rechecks the current item before deletion. Item changes, secondary indexes and stream records commit together. Streams expose one shard per stream, four image modes, authenticated 15-minute iterators and 24-hour retention. Re-enabling a stream creates a new ARN; old retained records remain readable.
 
-This is experimental software. Metadata dependencies currently serialize writes within a table. Index copies retain complete items internally, and physical reclamation of deleted table and index namespaces is pending. Provisioned capacity is reported, not enforced; continuous backups report DISABLED. Single-node integration checks do not establish multi-node fault tolerance or production readiness.
+This is experimental software. Metadata validation is striped across item writers; writes to the same item and the head of an enabled stream still contend. Index copies retain complete items internally, and physical reclamation of deleted table and index namespaces is pending. Provisioned capacity is reported, not enforced; continuous backups report DISABLED. Single-node integration checks do not establish multi-node fault tolerance or production readiness.
 
 For Terraform's S3 backend, point the DynamoDB endpoint at TiKronos and create a table with a string key named `LockID`. The state file stays in object storage. Terraform has deprecated DynamoDB-based locking. [Backend documentation](https://developer.hashicorp.com/terraform/language/backend/s3).

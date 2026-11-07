@@ -26,9 +26,10 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
     fun get(req: ObjectNode): ObjectNode {
         req.fieldsOnly("RequestItems", "ReturnConsumedCapacity")
         val capacity = Capacity(req)
+        val snapshot = db.snapshot()
         val groups =
             requests(req).map { (name, node) ->
-                readGroup(tables.find(name), node as? ObjectNode ?: invalid("Expected key group"))
+                readGroup(tables.find(name, snapshot), node as? ObjectNode ?: invalid("Expected key group"))
             }
         if (groups.sumOf { it.keys.size.toLong() } > MAX_BATCH_GET)
             invalid("At most $MAX_BATCH_GET keys per BatchGetItem")
@@ -36,7 +37,6 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
         val unprocessed = obj()
         val units = mutableMapOf<String, Double>()
         var remaining = RESPONSE_BUDGET
-        val snapshot = db.snapshot()
         for (group in groups) {
             val partitions = mutableMapOf<Value, Int>()
             val result = json.createArrayNode()

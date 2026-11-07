@@ -5,7 +5,9 @@ import tikronos.model.Table
 import tikronos.model.WriteResult
 import tikronos.storage.Records
 import tikronos.storage.Storage
+import tikronos.storage.StreamRecords
 import tikronos.storage.Transaction
+import tikronos.storage.TtlRecords
 import tikronos.storage.address
 
 /** The shared mutation boundary for API writes, batches and expiration. */
@@ -23,6 +25,8 @@ internal class ItemWriter(private val db: Storage) {
         ttl: Boolean = false,
         change: (Item?) -> Item?,
     ): WriteResult {
+        tx.prefetch(listOf(Storage.CATALOG + table.name, table.address(key),
+            TtlRecords.config(table.id), StreamRecords.config(table.id)))
         val current = tx.read(Storage.CATALOG + table.name)?.let(Records::table)
         if (current?.id != table.id)
             throw ApiError("ResourceNotFoundException", "Table no longer exists")
