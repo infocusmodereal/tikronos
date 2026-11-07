@@ -68,6 +68,19 @@ class TimestampOracleTest {
     }
 
     @Test
+    fun `an interrupted elected caller does not strand the next allocation`() {
+        val oracle = TimestampOracle { count -> List(count) { TiTimestamp(3, it.toLong()) } }
+        Executors.newSingleThreadExecutor().use { pool ->
+            pool.submit {
+                Thread.currentThread().interrupt()
+                assertFailsWith<InterruptedException> { oracle.next() }
+            }.get(5, TimeUnit.SECONDS)
+            val next = pool.submit<TiTimestamp> { oracle.next() }
+            assertEquals(3L, next.get(5, TimeUnit.SECONDS).physical)
+        }
+    }
+
+    @Test
     fun `allocation failure releases the next allocator and allows recovery`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
