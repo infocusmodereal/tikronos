@@ -3,6 +3,7 @@ package tikronos
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.time.Instant
 import java.util.UUID
+import org.tikv.common.Snapshot
 import tikronos.model.Table
 import tikronos.storage.Records
 import tikronos.storage.Storage
@@ -10,8 +11,8 @@ import tikronos.storage.TtlRecords
 
 internal class Tables(private val db: Storage) {
     private val streams = Streams(db)
-    fun find(name: String): Table =
-        db.read(db.snapshot(), Storage.CATALOG + name)?.let(Records::table) ?: missing(name)
+    fun find(name: String, snapshot: Snapshot = db.snapshot()): Table =
+        db.read(snapshot, Storage.CATALOG + name)?.let(Records::table) ?: missing(name)
 
     fun describe(req: ObjectNode): ObjectNode {
         req.fieldsOnly("TableName")

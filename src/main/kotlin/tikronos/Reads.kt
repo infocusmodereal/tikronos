@@ -25,7 +25,8 @@ internal class Reads(private val db: Storage, private val tables: Tables) {
                 listOf("KeyConditions", "KeyConditionExpression", "QueryFilter", "ScanIndexForward")
             else listOf("ScanFilter", "Segment", "TotalSegments")
         req.fieldsOnly(common + extra)
-        val table = tables.find(Tables.tableName(req))
+        val snapshot = db.snapshot()
+        val table = tables.find(Tables.tableName(req), snapshot)
         val target = readTarget(req, table)
         val expressions = RequestExpressions(req)
         val range =
@@ -52,7 +53,7 @@ internal class Reads(private val db: Storage, private val tables: Tables) {
         val endKey = if (!forward && cursor != null) cursor else end
         val page =
             collect(
-                db.ranges.scan(startKey, endKey, forward).map {
+                db.ranges.scan(startKey, endKey, forward, snapshot).map {
                     Records.item(it.value.toByteArray())
                 },
                 limit, target, fetch,

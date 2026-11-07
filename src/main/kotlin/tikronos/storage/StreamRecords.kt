@@ -5,6 +5,7 @@ import tikronos.model.StreamState
 import tikronos.obj
 
 internal object StreamRecords {
+    const val CONFIGS = "tikronos/v1/stream-config/"
     fun encode(state: StreamState): ByteArray = json.writeValueAsBytes(obj(
         "arn" to state.arn, "label" to state.label,
         "tableName" to state.tableName, "tableId" to state.tableId,
@@ -25,7 +26,7 @@ internal object StreamRecords {
     }
 
     const val PREFIX = "tikronos/v1/streams/"
-    fun config(tableId: String) = "tikronos/v1/stream-config/$tableId"
+    fun config(tableId: String) = CONFIGS + tableId
     fun descriptor(arn: String) = PREFIX + arn
     fun events(state: StreamState) = "tikronos/v1/events/${state.label}/"
     fun sequence(value: Long) = value.toString().padStart(SEQUENCE_WIDTH, '0')

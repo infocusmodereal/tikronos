@@ -1,5 +1,6 @@
 """Own the test JVM lifecycle so CI also verifies backfill across a real restart."""
 import subprocess
+import os
 import time
 from pathlib import Path
 from urllib.error import URLError
@@ -19,7 +20,9 @@ class Server:
         self.process = None
 
     def start(self):
-        self.process = subprocess.Popen([str(ROOT / "build/install/tikronos/bin/tikronos")], cwd=ROOT)
+        self.process = subprocess.Popen([str(ROOT / "build/install/tikronos/bin/tikronos")], cwd=ROOT,
+                                        env={**os.environ, "TIKRONOS_STORAGE_WORKERS": "8",
+                                             "TIKRONOS_MAX_REQUESTS": "16"})
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if self.process.poll() is not None:

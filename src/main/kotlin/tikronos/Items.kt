@@ -31,14 +31,15 @@ internal class Items(private val db: Storage, private val tables: Tables) {
             "AttributesToGet",
             "ReturnConsumedCapacity",
         )
-        val table = tables.find(Tables.tableName(req))
+        val snapshot = db.snapshot()
+        val table = tables.find(Tables.tableName(req), snapshot)
         val key = table.key(parseItem(req.obj("Key")))
         val expressions = RequestExpressions(req)
         val paths = expressions.projection()
         expressions.finish()
         val strong = req.flag("ConsistentRead")
         val capacity = Capacity(req)
-        val item = db.read(db.snapshot(), table.address(key))?.let(Records::item)
+        val item = db.read(snapshot, table.address(key))?.let(Records::item)
         return obj().apply {
             if (item != null)
                 set<ObjectNode>("Item", json.valueToTree(wireItem(project(item, paths))))

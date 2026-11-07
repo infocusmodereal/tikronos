@@ -10,29 +10,34 @@ import io.ktor.server.request.httpMethod
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
-import java.util.UUID
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import tikronos.config.HttpLimits
 import tikronos.protocol.DynamoRequest
 import tikronos.protocol.DynamoResponse
 import tikronos.protocol.RequestHeaders
 
 /** HTTP admission and body reads never occupy a blocking storage thread. */
-internal class HttpApi(private val api: Dynamo, private val storage: CoroutineDispatcher) {
-    private val slots = Semaphore(MAX_REQUESTS)
-    private val executions = Semaphore(HTTP_STORAGE_WORKERS)
+internal class HttpApi(
+    private val api: Dynamo,
+    private val storage: CoroutineDispatcher,
+    private val limits: HttpLimits,
+) {
+    private val slots = Semaphore(limits.maxRequests)
+    private val executions = Semaphore(limits.storageWorkers)
     private val bodies = RequestBodies()
     @Volatile private var draining = false
 
     suspend fun drain(timeoutMs: Long) {
         draining = true
-        withTimeoutOrNull(timeoutMs) { repeat(MAX_REQUESTS) { slots.acquire() } }
+        withTimeoutOrNull(timeoutMs) { repeat(limits.maxRequests) { slots.acquire() } }
     }
 
     suspend fun handle(call: ApplicationCall) {
@@ -110,11 +115,8 @@ internal class HttpApi(private val api: Dynamo, private val storage: CoroutineDi
         DynamoResponse(status.value, json.writeValueAsBytes(obj("__type" to code, "message" to message)))
 
     companion object {
-        private const val MAX_REQUESTS = 16
         private const val QUEUE_TIMEOUT_MS = 5000L
         private val HTTP_DATE = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US)
             .withZone(ZoneOffset.UTC)
     }
 }
-
-internal const val HTTP_STORAGE_WORKERS = 8

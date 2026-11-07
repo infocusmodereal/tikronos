@@ -2,19 +2,20 @@ package tikronos
 
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
-import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.connector
+import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import java.net.InetSocketAddress
 import java.net.URI
-import java.util.concurrent.Executors
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
+import tikronos.config.HttpLimits
 import tikronos.storage.Storage
 
 private fun addressArgument(args: Array<String>): String = when {
@@ -52,20 +53,22 @@ fun main(args: Array<String>) {
     System.setProperty("io.ktor.server.engine.ShutdownHook", "false")
     val bind = listenAddress(args)
     val signature = signature()
+    val limits = HttpLimits.fromEnvironment()
+    val cpus = Runtime.getRuntime().availableProcessors()
     require(signature != null || bind.address?.isLoopbackAddress == true) {
         "Credentials required on non-loopback listeners"
     }
     val session = TiSession.create(TiConfiguration.createDefault(System.getenv("TIKRONOS_PD") ?: "127.0.0.1:2379"))
     val storage = Storage(session)
     val maintenance = Maintenance(storage)
-    val workers = Executors.newFixedThreadPool(HTTP_STORAGE_WORKERS)
+    val workers = Executors.newFixedThreadPool(limits.storageWorkers)
     val dispatcher = workers.asCoroutineDispatcher()
-    val api = HttpApi(Dynamo(storage, signature), dispatcher)
+    val api = HttpApi(Dynamo(storage, signature), dispatcher, limits)
     val server = embeddedServer(Netty, configure = {
         connector { host = bind.hostString; port = bind.port }
         connectionGroupSize = 1
-        workerGroupSize = 2
-        callGroupSize = 2
+        workerGroupSize = (cpus / 2).coerceIn(2, MAX_NETWORK_THREADS)
+        callGroupSize = cpus.coerceIn(2, MAX_NETWORK_THREADS)
         shutdownGracePeriod = GRACE_MS
         shutdownTimeout = DRAIN_MS
     }) {
@@ -132,3 +135,4 @@ private fun closeResources(
 private const val MAX_PORT = 65535
 private const val GRACE_MS = 1000L
 private const val DRAIN_MS = 10_000L
+private const val MAX_NETWORK_THREADS = 8
