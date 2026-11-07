@@ -69,23 +69,27 @@ internal class AtomicCommit(private val session: TiSession) {
         lockTtl: Long,
     ) {
         val blindFences = values.keys.filter(MetadataFences::isFence).map(::bytes).toSet()
-        for (fences in listOf(false, true)) {
-            val keys = mutations.keys.filter { (it in blindFences) == fences }
-            RegionBatches(session).execute(
-                keys,
-                size = { mutations.getValue(it).serializedSize },
-            ) { _, batch, budget ->
-                session.regionStoreClientBuilder.build(batch.first(), budget).use { client ->
-                    // Fences carry no read-dependent value. Ignore committed reader locks,
-                    // but retain TiKV's live-lock checks and the ordinary primary decision.
+        RegionBatches(session).execute(
+            mutations.keys.toList(),
+            size = { mutations.getValue(it).serializedSize },
+        ) { _, batch, budget ->
+            session.regionStoreClientBuilder.build(batch.first(), budget).use { client ->
+                var remaining = batch
+                while (remaining.isNotEmpty()) {
+                    val blind = remaining.first() in blindFences
+                    val group = remaining.takeWhile { (it in blindFences) == blind }
+                    // Preserve lock order even when a metadata change also reads other metadata.
+                    // Only constant fence writes skip committed-version checks; live locks remain
+                    // checked.
                     client.prewrite(
                         budget,
                         primary,
-                        batch.map(mutations::getValue),
+                        group.map(mutations::getValue),
                         start,
                         lockTtl,
-                        fences,
+                        blind,
                     )
+                    remaining = remaining.drop(group.size)
                 }
             }
         }

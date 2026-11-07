@@ -9,7 +9,7 @@ import org.tikv.common.util.BackOffFunction.BackOffFuncType
 import org.tikv.common.util.ConcreteBackOffer
 import org.tikv.shade.com.google.protobuf.ByteString
 
-/** Repartition unacknowledged keys after a split, without replaying completed regions. */
+/** Preserve key order and repartition after a split without replaying completed batches. */
 internal class RegionBatches(private val session: TiSession) {
     fun execute(
         keys: List<ByteString>,
@@ -27,7 +27,7 @@ internal class RegionBatches(private val session: TiSession) {
                 pending
                     .asSequence()
                     // ByteString overload treats the unbounded end as an empty finite key.
-                    .filter { region.contains(Key.toRawKey(it)) }
+                    .takeWhile { region.contains(Key.toRawKey(it)) }
                     .take(MAX_KEYS)
                     .takeWhile { key ->
                         val next = size(key)
