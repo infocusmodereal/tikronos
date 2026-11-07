@@ -1,8 +1,10 @@
 package tikronos.storage
 
+import java.util.concurrent.TimeUnit
 import java.util.logging.Level
 import java.util.logging.Logger
 import org.tikv.common.TiSession
+import org.tikv.common.meta.TiTimestamp
 import org.tikv.common.exception.KeyException
 import org.tikv.kvproto.Kvrpcpb
 import org.tikv.shade.com.google.protobuf.ByteString
@@ -10,12 +12,16 @@ import org.tikv.txn.exception.WriteConflictException
 import tikronos.invalid
 
 /** Primary commit is the only decision point; never replay after attempting it. */
-internal class AtomicCommit(private val session: TiSession) {
+internal class AtomicCommit(
+    private val session: TiSession,
+    private val timestamp: () -> TiTimestamp = { session.timestamp },
+) {
     @Suppress("TooGenericExceptionCaught") // Abort every prewrite failure before a commit decision.
     fun commit(
         start: Long,
         values: Map<String, ByteArray?>,
         guards: Set<String> = emptySet(),
+        started: Long = System.nanoTime(),
     ): Boolean {
         // The primary must be an ordinary, conflict-checked key, never a blind fence write.
         val entries =
@@ -28,7 +34,7 @@ internal class AtomicCommit(private val session: TiSession) {
         }
         // TiKV measures TTL from startTs, including time spent reading before prewrite.
         val lockTtl =
-            maxOf(0, timestampMillis(session.timestamp.version) - timestampMillis(start)) +
+            TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - started).coerceAtLeast(0)) +
                 LOCK_TTL_MS
         val mutations =
             entries.associate { key ->
@@ -55,7 +61,14 @@ internal class AtomicCommit(private val session: TiSession) {
             if (prewriteConflict(error)) return false
             throw error
         }
-        val committed = SingleKeyCommit(session).commit(primary, start, session.timestamp.version)
+        val commitTs = try {
+            timestamp().version
+        } catch (error: Exception) {
+            // No commit RPC has been attempted, so aborting remains unambiguous.
+            resolve(entries, start, 0)
+            throw error
+        }
+        val committed = SingleKeyCommit(session, timestamp).commit(primary, start, commitTs)
         // Failure here cannot undo the durable primary decision. Readers resolve remaining locks.
         resolve(entries.drop(1), start, committed)
         return true
@@ -72,25 +85,19 @@ internal class AtomicCommit(private val session: TiSession) {
         RegionBatches(session).execute(
             mutations.keys.toList(),
             size = { mutations.getValue(it).serializedSize },
-        ) { _, batch, budget ->
-            session.regionStoreClientBuilder.build(batch.first(), budget).use { client ->
-                var remaining = batch
-                while (remaining.isNotEmpty()) {
-                    val blind = remaining.first() in blindFences
-                    val group = remaining.takeWhile { (it in blindFences) == blind }
-                    // Preserve lock order even when a metadata change also reads other metadata.
-                    // Only constant fence writes skip committed-version checks; live locks remain
-                    // checked.
-                    client.prewrite(
-                        budget,
-                        primary,
-                        group.map(mutations::getValue),
-                        start,
-                        lockTtl,
-                        blind,
-                    )
-                    remaining = remaining.drop(group.size)
-                }
+        ) { region, batch, budget ->
+            var remaining = batch
+            while (remaining.isNotEmpty()) {
+                val blind = remaining.first() in blindFences
+                val group = remaining.takeWhile { (it in blindFences) == blind }
+                // Preserve lock order even when a metadata change also reads other metadata.
+                // Only constant fence writes skip committed-version checks; live locks remain
+                // checked.
+                Prewrite(session).send(
+                    region, budget, primary, group.map(mutations::getValue),
+                    start, lockTtl, blind, mutations.size,
+                )
+                remaining = remaining.drop(group.size)
             }
         }
     }
@@ -102,6 +109,7 @@ internal class AtomicCommit(private val session: TiSession) {
                     it is KeyException &&
                         (it.keyErr?.hasConflict() == true ||
                             it.keyErr?.hasLocked() == true ||
+                            !it.keyErr?.retryable.isNullOrEmpty() ||
                             it.message.orEmpty().startsWith("retryable:"))
             }
 

@@ -52,7 +52,8 @@ internal class Items(private val db: Storage, private val tables: Tables) {
         val update = operation == "UpdateItem"
         val field = if (put) "Item" else "Key"
         req.writeFields(field, update)
-        val table = tables.find(Tables.tableName(req))
+        val initial = db.transaction()
+        val table = tables.find(Tables.tableName(req), initial)
         val input = parseItem(req.obj(field))
         val key = table.key(input, exact = !put)
         val expressions = RequestExpressions(req)
@@ -66,7 +67,7 @@ internal class Items(private val db: Storage, private val tables: Tables) {
             invalid("Invalid ReturnValuesOnConditionCheckFailure")
         val capacity = Capacity(req)
         val result =
-            writer.mutate(table, key) { old ->
+            writer.mutate(table, key, initial) { old ->
                     if (condition?.matches(old.orEmpty()) == false) {
                         throw ConditionFailed(old.takeIf { onFailure == "ALL_OLD" })
                     }

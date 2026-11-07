@@ -58,7 +58,9 @@ fun main(args: Array<String>) {
     require(signature != null || bind.address?.isLoopbackAddress == true) {
         "Credentials required on non-loopback listeners"
     }
-    val session = TiSession.create(TiConfiguration.createDefault(System.getenv("TIKRONOS_PD") ?: "127.0.0.1:2379"))
+    val configuration = TiConfiguration.createDefault(System.getenv("TIKRONOS_PD") ?: "127.0.0.1:2379")
+    configuration.batchGetConcurrency = limits.storageWorkers
+    val session = TiSession.create(configuration)
     val storage = Storage(session)
     val maintenance = Maintenance(storage)
     val workers = Executors.newFixedThreadPool(limits.storageWorkers)

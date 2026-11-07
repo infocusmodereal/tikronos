@@ -3,7 +3,11 @@ package tikronos.storage
 import org.tikv.common.Snapshot
 
 /** Point reads acquire validation locks; metadata uses striped validation fences. */
-internal class Transaction(private val snapshot: Snapshot, private val storage: Storage) {
+internal class Transaction(
+    private val snapshot: Snapshot,
+    private val storage: Storage,
+    internal val started: Long = System.nanoTime(),
+) {
     val version: Long get() = snapshot.version
     private val reads = linkedMapOf<String, ByteArray?>()
     internal val writes = linkedMapOf<String, ByteArray?>()
