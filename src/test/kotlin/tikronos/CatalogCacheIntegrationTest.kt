@@ -6,6 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.junit.jupiter.api.Tag
 import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
@@ -65,6 +66,19 @@ class CatalogCacheIntegrationTest {
             while (first.snapshot().version <= until) Thread.sleep(25)
             first.read(first.snapshot(), key)
             assertNotNull(first.catalog.cached(key, first.snapshot().version))
+        }
+
+    @Test
+    fun `a newly granted lease conflicts with a previously prepared schema change`() =
+        fixture { first, second, session, table ->
+            val key = Storage.CATALOG + table.name
+            val ddl = second.transaction()
+            ddl.write(key, Records.encodeTable(table.copy(partitionKey = "newKey")))
+            assertTrue(second.catalog.prepare(ddl))
+            first.read(first.snapshot(), key)
+            assertNotNull(first.catalog.cached(key, first.snapshot().version))
+            assertFalse(AtomicCommit(session).commit(ddl.version, ddl.writes, ddl.guards()))
+            assertEquals(table, Tables(first).find(table.name))
         }
 
     private fun fixture(test: (Storage, Storage, TiSession, Table) -> Unit) {
