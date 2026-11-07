@@ -3,6 +3,7 @@ package tikronos.storage
 import java.util.concurrent.TimeUnit
 import org.tikv.common.TiSession
 import org.tikv.common.exception.RegionException
+import org.tikv.common.key.Key
 import org.tikv.common.region.TiRegion
 import org.tikv.common.util.BackOffFunction.BackOffFuncType
 import org.tikv.common.util.ConcreteBackOffer
@@ -25,7 +26,8 @@ internal class RegionBatches(private val session: TiSession) {
             val batch =
                 pending
                     .asSequence()
-                    .filter(region::contains)
+                    // ByteString overload treats the unbounded end as an empty finite key.
+                    .filter { region.contains(Key.toRawKey(it)) }
                     .take(MAX_KEYS)
                     .takeWhile { key ->
                         val next = size(key)
