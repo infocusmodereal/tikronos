@@ -29,7 +29,7 @@ internal class ItemWriter(private val db: Storage) {
     ): WriteResult {
         tx.prefetch(listOf(Storage.CATALOG + table.name, table.address(key),
             TtlRecords.config(table.id), StreamRecords.config(table.id)))
-        val current = tx.read(Storage.CATALOG + table.name)?.let(Records::table)
+        val current = tx.table(table.name)
         if (current?.id != table.id)
             throw ApiError("ResourceNotFoundException", "Table no longer exists")
         val address = current.address(key)
