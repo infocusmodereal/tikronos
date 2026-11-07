@@ -35,7 +35,9 @@ class AtomicIntegrationTest {
         db.mutate(prefix + "config") { byteArrayOf(1) }
         val before = db.snapshot()
         var first = true
-        db.atomic { tx ->
+        val initial = db.transaction()
+        initial.read(prefix + "config")
+        db.atomic(initial) { tx ->
             val value = tx.read(prefix + "config")
             if (first) {
                 first = false

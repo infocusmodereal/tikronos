@@ -15,8 +15,10 @@ internal class ItemWriter(private val db: Storage) {
     private val ttl = Ttl(db)
     private val streams = Streams(db)
 
-    fun mutate(table: Table, key: Item, change: (Item?) -> Item?): WriteResult =
-        db.atomic { tx -> change(tx, table, key, change = change) }
+    fun mutate(
+        table: Table, key: Item, initial: Transaction? = null, change: (Item?) -> Item?,
+    ): WriteResult =
+        db.atomic(initial) { tx -> change(tx, table, key, change = change) }
 
     fun change(
         tx: Transaction,

@@ -4,7 +4,14 @@ import org.tikv.common.Snapshot
 import org.tikv.common.TiSession
 
 internal class Storage(private val session: TiSession) {
-    fun snapshot(): Snapshot = session.createSnapshot()
+    private val timestamps = TimestampOracle(session.pdClient)
+
+    fun snapshot(): Snapshot = session.createSnapshot(timestamps.next())
+
+    fun transaction(): Transaction {
+        val started = System.nanoTime()
+        return Transaction(snapshot(), this, started)
+    }
 
     fun read(snapshot: Snapshot, key: String): ByteArray? =
         snapshot.get(key.encodeToByteArray()).takeIf { it.isNotEmpty() }
@@ -20,12 +27,14 @@ internal class Storage(private val session: TiSession) {
             .toList()
     }
 
-    fun <T> atomic(change: (Transaction) -> T): T {
+    fun <T> atomic(initial: Transaction? = null, change: (Transaction) -> T): T {
         repeat(MAX_ATTEMPTS) {
-            val tx = Transaction(snapshot(), this)
+            val tx = if (it == 0 && initial != null) initial else transaction()
             val result = change(tx)
             if (tx.writes.isEmpty()) return result
-            if (AtomicCommit(session).commit(tx.version, tx.writes, tx.guards())) return result
+            val committed = AtomicCommit(session, timestamps::next)
+                .commit(tx.version, tx.writes, tx.guards(), tx.started)
+            if (committed) return result
         }
         throw ContentionLimitExceeded()
     }
