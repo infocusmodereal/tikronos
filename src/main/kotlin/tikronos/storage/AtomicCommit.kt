@@ -61,7 +61,14 @@ internal class AtomicCommit(
             if (prewriteConflict(error)) return false
             throw error
         }
-        val committed = SingleKeyCommit(session, timestamp).commit(primary, start, timestamp().version)
+        val commitTs = try {
+            timestamp().version
+        } catch (error: Exception) {
+            // No commit RPC has been attempted, so aborting remains unambiguous.
+            resolve(entries, start, 0)
+            throw error
+        }
+        val committed = SingleKeyCommit(session, timestamp).commit(primary, start, commitTs)
         // Failure here cannot undo the durable primary decision. Readers resolve remaining locks.
         resolve(entries.drop(1), start, committed)
         return true
@@ -79,20 +86,18 @@ internal class AtomicCommit(
             mutations.keys.toList(),
             size = { mutations.getValue(it).serializedSize },
         ) { region, batch, budget ->
-            run {
-                var remaining = batch
-                while (remaining.isNotEmpty()) {
-                    val blind = remaining.first() in blindFences
-                    val group = remaining.takeWhile { (it in blindFences) == blind }
-                    // Preserve lock order even when a metadata change also reads other metadata.
-                    // Only constant fence writes skip committed-version checks; live locks remain
-                    // checked.
-                    Prewrite(session).send(
-                        region, budget, primary, group.map(mutations::getValue),
-                        start, lockTtl, blind, mutations.size,
-                    )
-                    remaining = remaining.drop(group.size)
-                }
+            var remaining = batch
+            while (remaining.isNotEmpty()) {
+                val blind = remaining.first() in blindFences
+                val group = remaining.takeWhile { (it in blindFences) == blind }
+                // Preserve lock order even when a metadata change also reads other metadata.
+                // Only constant fence writes skip committed-version checks; live locks remain
+                // checked.
+                Prewrite(session).send(
+                    region, budget, primary, group.map(mutations::getValue),
+                    start, lockTtl, blind, mutations.size,
+                )
+                remaining = remaining.drop(group.size)
             }
         }
     }

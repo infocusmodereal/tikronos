@@ -4,6 +4,10 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+import java.util.concurrent.TimeUnit
+import org.tikv.kvproto.TikvGrpc
 import kotlin.test.assertNull
 import org.junit.jupiter.api.Tag
 import org.tikv.common.TiConfiguration
@@ -52,6 +56,32 @@ class AtomicIntegrationTest {
             assertContentEquals(byteArrayOf(2), db.read(after, prefix + name))
         }
         db.atomic { tx -> listOf("config", "item", "event").forEach { tx.write(prefix + it, null) } }
+    }
+
+    @Test
+    fun `failed commit timestamp allocation rolls back every prepared key immediately`() = withStorage { _, session ->
+        val prefix = "tikronos-test/${UUID.randomUUID()}/"
+        val keys = listOf(prefix + "a", prefix + "b")
+        val start = session.timestamp.version
+        assertFailsWith<IllegalStateException> {
+            AtomicCommit(session) { error("PD unavailable") }
+                .commit(start, keys.associateWith { byteArrayOf(1) })
+        }
+        val readVersion = session.timestamp.version
+        for (key in keys) {
+            val region = session.regionManager.getRegionByKey(bytes(key))
+            val store = session.regionManager.getStoreById(region.leader.storeId)
+            val channel = session.channelFactory.getChannel(store.address, session.pdClient.hostMapping)
+            val request = Kvrpcpb.GetRequest.newBuilder()
+                .setContext(region.getReplicaContext(region.leader, emptySet()))
+                .setKey(session.pdClient.codec.encodeKey(bytes(key))).setVersion(readVersion).build()
+            // Bypass SDK lock resolution: an abandoned lock must fail, not wait until its TTL expires.
+            val response = TikvGrpc.newBlockingStub(channel)
+                .withDeadlineAfter(3, TimeUnit.SECONDS).kvGet(request)
+            assertFalse(response.hasRegionError(), response.regionError.toString())
+            assertFalse(response.hasError(), response.error.toString())
+            assertTrue(response.value.isEmpty)
+        }
     }
 
     @Test

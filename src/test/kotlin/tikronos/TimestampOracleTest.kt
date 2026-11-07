@@ -68,7 +68,7 @@ class TimestampOracleTest {
     }
 
     @Test
-    fun `allocation failure releases waiting callers and allows recovery`() {
+    fun `allocation failure releases the next allocator and allows recovery`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val oracle = TimestampOracle { count ->
