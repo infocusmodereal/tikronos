@@ -23,6 +23,33 @@ import tikronos.storage.Storage
 @Tag("tikv")
 class CatalogCacheIntegrationTest {
     @Test
+    fun `overlapping renewals preserve coverage for older snapshots`() = fixture { first, _, _, table ->
+        val key = Storage.CATALOG + table.name
+        first.catalog.read(first.snapshot(), key)
+        val old = first.snapshot()
+        val initial = assertNotNull(first.catalog.cached(key, old.version))
+        while (first.snapshot().version < initial.until - CatalogLeases.DURATION / 2) Thread.sleep(10)
+        first.catalog.read(first.snapshot(), key)
+        val renewed = assertNotNull(first.catalog.cached(key, old.version))
+        assertTrue(renewed.until > initial.until)
+        assertEquals(table, Tables(first).find(table.name, old))
+    }
+
+    @Test
+    fun `identical catalog bytes after a drained lease cannot extend old snapshot coverage`() =
+        fixture { first, second, _, table ->
+            val key = Storage.CATALOG + table.name
+            first.catalog.read(first.snapshot(), key)
+            val old = first.snapshot()
+            assertNotNull(first.catalog.cached(key, old.version))
+            // TTL and stream configuration changes can deliberately leave the table bytes unchanged.
+            second.atomic { it.write(key, Records.encodeTable(table)) }
+            first.catalog.read(first.snapshot(), key)
+            assertNull(first.catalog.cached(key, old.version))
+            assertEquals(table, Tables(first).find(table.name, old))
+        }
+
+    @Test
     fun `expired leased attempt retries with full validation rather than starving a long write`() =
         fixture { first, _, _, table ->
             first.catalog.warmup()
