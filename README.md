@@ -1,56 +1,53 @@
 # TiKronos
 
-[Documentation](https://infocusmodereal.github.io/tikronos/) | [Quickstart](https://infocusmodereal.github.io/tikronos/quickstart/)
+A DynamoDB-compatible HTTP service backed by TiKV. Point your DynamoDB client at TiKronos; TiKV stores the tables and items and provides transactional persistence.
 
-TiKronos aims to let applications use the DynamoDB API with TiKV as their storage engine. Its first compatibility target is conditional writes for state locking.
+TiKronos is a standalone Kotlin application running on Ktor, Netty and Java 21. PD and TiKV run separately. It is **experimental** and implements a subset of DynamoDB, not complete API parity.
 
-TiKronos takes its name from TiKV and a play on Chronos and Kronos (Cronus), the Titan who devoured his children in Greek mythology. The idea is to give TiKV an appetite for DynamoDB workloads. Bring yours.
+[Documentation](https://infocusmodereal.github.io/tikronos/) | [Compatibility](https://infocusmodereal.github.io/tikronos/compatibility/) | [Contributing](docs/contributing.md)
 
-## Run locally
+## Quickstart
 
-With JDK 21 and a running TiKV cluster, point TiKronos at its PD endpoint:
-
-```sh
-TIKRONOS_PD=127.0.0.1:2379 ./gradlew run
-```
-
-The HTTP endpoint defaults to `127.0.0.1:8000`. Loopback supports unsigned requests for development. To verify SigV4, set `TIKRONOS_ACCESS_KEY`, `TIKRONOS_SECRET_KEY` and optionally `TIKRONOS_REGION` (default `us-east-1`). Other listen addresses require credentials. Use a TLS terminator for remote access. Run `./gradlew check` for static analysis and unit tests.
-
-When upgrading a cluster that ran an earlier pre-release, stop all old instances before starting the new ones. The metadata validation protocol cannot safely mix old and new writers. The service reads existing records and writes a versioned format. Rolling back after the first write requires restoring a pre-upgrade backup.
-
-## Container and distribution
-
-TiKronos is a standalone Kotlin service using Ktor with Netty. Clients use the DynamoDB HTTP endpoint; PD and TiKV run separately. Blocking TiKV calls run on dedicated threads, with eight workers per available CPU (up to 128 by default) and twice as many admitted requests. Set `TIKRONOS_STORAGE_WORKERS` and `TIKRONOS_MAX_REQUESTS` to override these bounds. Body reads allow three seconds of inactivity and thirty seconds total, with a shared 64 MiB raw-buffer budget. Completed bodies wait up to five seconds for a storage worker. Excess requests receive a retryable throttling response before execution. Shutdown rejects new requests and drains admitted requests for up to ten seconds before stopping the HTTP engine.
-
-For a single-node development environment:
+With Docker Compose and the AWS CLI installed:
 
 ```sh
+git clone https://github.com/infocusmodereal/tikronos.git
+cd tikronos
 docker compose up --build -d
+
+export AWS_ACCESS_KEY_ID=local
+export AWS_SECRET_ACCESS_KEY=local-development-only
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_PAGER=""
+unset AWS_SESSION_TOKEN
+
+aws dynamodb list-tables --endpoint-url http://localhost:8000
 ```
 
-Use endpoint `http://localhost:8000`, region `us-east-1`, access key `local` and secret `local-development-only`. These credentials are for this loopback-only example. PD and TiKV ports stay inside the Compose network. Startup may take a moment before storage is available. `GET /healthz` is a process liveness check, not a storage readiness check. Stop with `docker compose down`; named volumes retain data.
+The stack exposes the API on loopback only. These are public development credentials. Storage may take a moment to start; retry the signed request if needed. The [quickstart](docs/quickstart.md) shows how to create a table and read and write items.
 
-To connect to an existing cluster, build the image and provide credentials through your environment:
+Stop with `docker compose down`; named volumes retain the data. Images are currently built from source. For an existing TiKV cluster, see [container and Java distribution setup](docs/configuration.md).
+
+## What's supported
+
+- Table management, item CRUD and conditional writes.
+- Query, Scan, batch operations and secondary indexes.
+- TTL and DynamoDB Streams, with documented compatibility limits.
+
+Transaction APIs, IAM authorization and backup/restore APIs are not implemented. Read the [compatibility guide](docs/compatibility.md) and [operating and upgrade requirements](docs/operations.md) before using persistent data. Terraform locking guidance is in the [quickstart](docs/quickstart.md#terraform-locking).
+
+## Development
+
+With Java 21 installed:
 
 ```sh
-docker build -t tikronos:local .
-docker run --rm --memory 2g -p 127.0.0.1:8000:8000 --stop-timeout 60 \
-  -e TIKRONOS_PD -e TIKRONOS_ACCESS_KEY -e TIKRONOS_SECRET_KEY \
-  tikronos:local
+./gradlew check installDist
 ```
 
-The container runs as UID 10001 on Java 21, with root-owned application files. Its heap defaults to 70% of the container memory limit, and the JVM exits on heap exhaustion. Override `JAVA_OPTS` to tune this; JSON parsing and native buffers also need memory. PD and every advertised TiKV address must be reachable from the container; `localhost` refers to the container itself. TLS termination remains external. Images are built locally; no registry release is published yet.
+See [Contributing](docs/contributing.md) for TiKV integration tests and documentation checks. Bug reports and focused pull requests are welcome. Report vulnerabilities through the [security policy](SECURITY.md).
 
-For a host with Java 21, `./gradlew installDist` creates `build/install/tikronos/bin/tikronos` and its libraries. `./gradlew distTar distZip` produces portable distributions under `build/distributions`.
+## Name and license
 
-## DynamoDB compatibility
+TiKronos combines TiKV with a play on Chronos and Kronos (Cronus), the Titan who devoured his children. The idea is to give TiKV an appetite for DynamoDB workloads. Bring yours.
 
-TiKronos supports table management and tags, endpoint discovery, item CRUD, Query, Scan, BatchGetItem and BatchWriteItem. Partition and optional sort keys accept strings, numbers or binary data. Items can also contain booleans, nulls, documents and sets. Conditions, updates, filters and projections share expression evaluation. Item writes re-evaluate conditions against TiKV after a write conflict.
-
-Query and Scan return up to 1 MiB before filtering. Forward and reverse queries read bounded TiKV ranges at a single snapshot per request. Parallel Scan assigns each worker a disjoint key range. Batch requests accept up to 100 item keys or writes. Retry the entries returned in UnprocessedKeys or UnprocessedItems. Dropping a table retires its storage namespace; physical reclamation is pending.
-
-Global and local secondary indexes support sparse keys and projections. New global indexes backfill in bounded batches with persistent checkpoints before becoming ACTIVE. TTL indexes expiration candidates and rechecks the current item before deletion. Item changes, secondary indexes and stream records commit together. Streams expose one shard per stream, four image modes, authenticated 15-minute iterators and 24-hour retention. Re-enabling a stream creates a new ARN; old retained records remain readable.
-
-This is experimental software. Metadata validation is striped across item writers; writes to the same item and the head of an enabled stream still contend. Index copies retain complete items internally, and physical reclamation of deleted table and index namespaces is pending. Provisioned capacity is reported, not enforced; continuous backups report DISABLED. Single-node integration checks do not establish multi-node fault tolerance or production readiness.
-
-For Terraform's S3 backend, point the DynamoDB endpoint at TiKronos and create a table with a string key named `LockID`. The state file stays in object storage. Terraform has deprecated DynamoDB-based locking. [Backend documentation](https://developer.hashicorp.com/terraform/language/backend/s3).
+[MIT](LICENSE).

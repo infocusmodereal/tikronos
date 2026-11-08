@@ -1,5 +1,7 @@
 package tikronos
 
+import tikronos.protocol.Signature
+
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
 import io.ktor.server.engine.connector

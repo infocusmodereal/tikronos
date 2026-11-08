@@ -31,11 +31,18 @@ aws dynamodb list-tables --endpoint-url http://localhost:8000
 ## Create and read an item
 
 ```sh
-aws dynamodb create-table --endpoint-url http://localhost:8000   --table-name Example   --attribute-definitions AttributeName=pk,AttributeType=S   --key-schema AttributeName=pk,KeyType=HASH   --billing-mode PAY_PER_REQUEST
+aws dynamodb create-table --endpoint-url http://localhost:8000 \
+  --table-name Example \
+  --attribute-definitions AttributeName=pk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
 
-aws dynamodb put-item --endpoint-url http://localhost:8000   --table-name Example --item '{"pk":{"S":"hello"},"message":{"S":"from TiKV"}}'
+aws dynamodb put-item --endpoint-url http://localhost:8000 \
+  --table-name Example \
+  --item '{"pk":{"S":"hello"},"message":{"S":"from TiKV"}}'
 
-aws dynamodb get-item --endpoint-url http://localhost:8000   --table-name Example --key '{"pk":{"S":"hello"}}' --consistent-read
+aws dynamodb get-item --endpoint-url http://localhost:8000 \
+  --table-name Example --key '{"pk":{"S":"hello"}}' --consistent-read
 ```
 
 Use the same endpoint, region and credentials in your SDK. API compatibility is described in the [compatibility guide](compatibility.md).

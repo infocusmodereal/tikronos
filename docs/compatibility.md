@@ -32,7 +32,7 @@ Streams expose one shard per stream, four image modes, authenticated 15-minute i
 - Some Query/Scan cursor validation and error wording differ, including HASH-only Query with `ExclusiveStartKey`.
 - Provisioned capacity is reported but not enforced. Backup status is DISABLED; no backup/restore API is implemented.
 - Transaction APIs, global tables and PartiQL are not implemented.
-- Writes currently contend on table metadata. Index copies retain complete items internally.
+- Cached table definitions use coordinated leases. Writes to the same item and an enabled stream head still contend; schema changes drain catalog leases. See [Operations](operations.md#table-catalog). Index copies retain complete items internally.
 - Deleting a table or index retires its namespace; physical reclamation is pending.
 
-The current compatibility corpus recorded 345 passes, six additional passing expected-failure cases and six expected failures. Five connection-failure, partial-batch and tombstone cases were excluded. These results do not establish complete parity or production readiness.
+The integration tests cover specific API, concurrency and recovery cases. Passing them does not establish complete DynamoDB parity or production readiness. See [Contributing](contributing.md#development-checks) for reproducible checks.

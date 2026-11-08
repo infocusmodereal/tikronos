@@ -80,17 +80,21 @@ the TiKV session. TiKV's async-commit protocol remains disabled.
 
 Optional Java Flight Recorder event `tikronos.Request` reports the operation, response status,
 rejection reason, storage-worker queue wait, timestamp allocation time, prewrite exchange time,
-primary-commit phase time, and 1PC attempt/commit/fallback counts. Attempt counts include resends, so they need not equal commits plus fallbacks. Phase durations are summed
+primary-commit phase time, and 1PC attempt/commit/fallback counts. Attempt counts include resends,
+so they need not equal commits plus fallbacks. Phase durations are summed
 within a request, including retries and catalog renewal; they are not exclusive CPU time.
 Timestamp time includes waiting for the timestamp allocator. Commit time includes region lookup
 and retry waits; prewrite time covers the RPC exchange only. Keys, values and credentials are not recorded.
 Without an active JFR recording, request events are not allocated.
+Rejection reasons distinguish `admission`, `queue`, `body_budget`, `draining`, `contention`
+and `unknown_outcome`. The latter is an ambiguous write result, not a safe rejection to replay.
 
 For a bounded diagnostic run, add
 `-XX:StartFlightRecording=filename=/tmp/tikronos.jfr,duration=120s,maxsize=128m,settings=default`
 to `JAVA_OPTS`, retaining the existing heap options. Read events with
 `jfr print --events tikronos.Request /tmp/tikronos.jfr` from a Java 21 JDK.
 Profile separately from comparative benchmarks to avoid attributing recording overhead to storage.
+Wait for the recording to finish and verify a copied recording before stopping its container.
 
 ## Storage and upgrades
 
