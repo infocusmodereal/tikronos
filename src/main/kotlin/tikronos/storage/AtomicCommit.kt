@@ -1,6 +1,7 @@
 package tikronos.storage
 
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executor
 import java.util.logging.Level
 import java.util.logging.Logger
 import org.tikv.common.TiSession
@@ -14,14 +15,16 @@ import tikronos.invalid
 /** Primary commit is the only decision point; never replay after attempting it. */
 internal class AtomicCommit(
     private val session: TiSession,
+    private val cleanup: Executor = Executor { it.run() },
     private val timestamp: () -> TiTimestamp = { session.timestamp },
 ) {
-    @Suppress("TooGenericExceptionCaught") // Abort every prewrite failure before a commit decision.
+    @Suppress("TooGenericExceptionCaught", "ReturnCount") // Distinct safe aborts before a primary decision.
     fun commit(
         start: Long,
         values: Map<String, ByteArray?>,
         guards: Set<String> = emptySet(),
         started: Long = System.nanoTime(),
+        ceiling: Long = Long.MAX_VALUE,
     ): Boolean {
         // The primary must be an ordinary, conflict-checked key, never a blind fence write.
         val entries =
@@ -68,9 +71,16 @@ internal class AtomicCommit(
             resolve(entries, start, 0)
             throw error
         }
-        val committed = SingleKeyCommit(session, timestamp).commit(primary, start, commitTs)
+        val committed = try {
+            SingleKeyCommit(session, timestamp).commit(primary, start, commitTs, ceiling)
+        } catch (_: CommitRefused) {
+            // Explicit refusal means no primary decision exists. Never do this after transport ambiguity.
+            resolve(entries, start, 0)
+            return false
+        }
         // Failure here cannot undo the durable primary decision. Readers resolve remaining locks.
-        resolve(entries.drop(1), start, committed)
+        val secondaries = entries.drop(1)
+        if (secondaries.isNotEmpty()) cleanup.execute { resolve(secondaries, start, committed) }
         return true
     }
 

@@ -23,8 +23,12 @@ Tables with an index being backfilled bypass caching because their checkpoints c
 
 [TiKV MVCC](https://tikv.org/deep-dive/distributed-transaction/isolation-level/) supplies snapshot reads and write conflicts. The cache still needs coordination: snapshot
 isolation alone does not invalidate process memory or validate arbitrary read dependencies.
-Existing metadata fences protect writes that overlap schema changes. The same storage gate covers
-API schema changes, tags, index checkpoints, and deletion/recreation across instances.
+Lease-covered writes omit metadata fence locks only while their commit timestamp remains within
+the lease. Expiry, including a reader pushing the minimum commit timestamp past that limit,
+causes an explicit abort and retry with full validation. Transport-ambiguous commits are never
+replayed. TTL and stream configuration changes also drain the catalog lease; maintenance-only
+cursor progress does not change item-write semantics. Uncovered reads retain metadata fences.
+The same storage gate covers API schema changes, tags, index checkpoints, and deletion/recreation.
 
 ## Health and shutdown
 
@@ -47,6 +51,16 @@ SIGTERM rejects new API requests, drains admitted requests for up to ten seconds
 `TIKRONOS_STORAGE_WORKERS` accepts 1-256 workers. `TIKRONOS_MAX_REQUESTS` must be at least the worker count and at most 512. Defaults use the JVM's available CPU count, which respects container CPU limits on supported runtimes.
 
 The raw-buffer budget does not include all parsed JSON or native allocations. Admission pressure returns a throttling error; oversized bodies return HTTP 413 and body timeouts return HTTP 408. Clients should use bounded retries with backoff where an operation can safely be retried.
+
+## Write completion
+
+Writes acknowledge the durable TiKV primary commit. Secondary locks are completed
+by eight background workers with a queue of 64 transactions; a full queue falls
+back to completion in the request thread. Aborted transactions still clean up
+synchronously before retrying. This uses ordinary two-phase commit, without
+enabling TiKV's async-commit protocol. Readers can resolve unfinished secondaries
+from the primary decision after a crash. Shutdown drains completion work before
+closing the TiKV session; unfinished locks remain recoverable by TiKV clients.
 
 ## Storage and upgrades
 

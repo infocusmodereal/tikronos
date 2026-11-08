@@ -2,6 +2,8 @@ package tikronos.storage
 
 import org.tikv.common.Snapshot
 import tikronos.model.Table
+import tikronos.model.LeasedValue
+import tikronos.model.ReadValidation
 
 /** Point reads acquire validation locks; metadata uses striped validation fences. */
 internal class Transaction(
@@ -9,15 +11,18 @@ internal class Transaction(
     private val storage: Storage,
     internal val started: Long = System.nanoTime(),
     private val cached: Boolean = true,
+    private val allowLeases: Boolean = true,
 ) {
     val version: Long get() = snapshot.version
     private val reads = linkedMapOf<String, ByteArray?>()
     internal val writes = linkedMapOf<String, ByteArray?>()
     private var scope: String? = null
+    private val covered = mutableSetOf<String>()
+    private var ceiling = Long.MAX_VALUE
 
     fun prefetch(keys: List<String>) {
-        if (cached) keys.filter { it.startsWith(Storage.CATALOG) && it !in reads && it !in writes }
-            .forEach { key -> storage.catalog.cached(key, version)?.let { reads[key] = it } }
+        if (cached && allowLeases) keys.filter { it.startsWith(Storage.CATALOG) && it !in reads && it !in writes }
+            .forEach { key -> storage.catalog.cached(key, version)?.let { remember(key, it) } }
         val missing = keys.distinct().filter { it !in reads && it !in writes }
         if (missing.isEmpty()) return
         val found = snapshot.batchGet(READ_BUDGET_MS, missing.map(String::encodeToByteArray))
@@ -27,8 +32,11 @@ internal class Transaction(
 
     fun read(key: String): ByteArray? {
         if (writes.containsKey(key)) return writes[key]
-        if (!reads.containsKey(key)) reads[key] =
-            if (cached) storage.read(snapshot, key) else storage.directRead(snapshot, key)
+        if (!reads.containsKey(key)) {
+            val lease = if (cached && allowLeases && key.startsWith(Storage.CATALOG))
+                storage.catalog.leased(snapshot, key) else null
+            if (lease != null) remember(key, lease) else reads[key] = storage.directRead(snapshot, key)
+        }
         return reads[key]
     }
 
@@ -48,6 +56,22 @@ internal class Transaction(
 
     internal fun guards(): Set<String> = (reads.keys - writes.keys)
         .map { MetadataFences.guard(it, checkNotNull(scope)) }.toSet()
+
+    private fun remember(key: String, lease: LeasedValue) {
+        reads[key] = lease.bytes
+        covered += key
+        ceiling = minOf(ceiling, lease.until)
+    }
+
+    /** Only for dependencies whose semantic changes also drain this catalog lease. */
+    fun coveredBy(catalog: String, keys: List<String>) {
+        if (catalog in covered) covered.addAll(keys)
+    }
+
+    internal fun validation() = ReadValidation(
+        (reads.keys - writes.keys - covered).map { MetadataFences.guard(it, checkNotNull(scope)) }.toSet(),
+        ceiling,
+    )
 
     companion object { private const val READ_BUDGET_MS = 3000 }
 }

@@ -1,19 +1,21 @@
 package tikronos.storage
 
 import java.util.LinkedHashMap
+import java.util.concurrent.locks.ReentrantLock
 import org.tikv.common.Snapshot
 import tikronos.model.Table
 import tikronos.model.CatalogLease
+import tikronos.model.LeasedValue
 
 /** Read leases amortize catalog RPCs; TiKV transactions arbitrate renewal against catalog writers. */
 internal class CatalogCache(private val db: Storage) {
     private data class Entry(val bytes: ByteArray, val table: Table, val from: Long, val until: Long)
     private val entries = LinkedHashMap<String, Entry>(INITIAL_CAPACITY, LOAD_FACTOR, true)
-    private val loaders = Array(LOCKS) { Any() }
+    private val loaders = Array(LOCKS) { ReentrantLock() }
     private var bytes = 0L
 
-    fun cached(key: String, version: Long): ByteArray? = synchronized(entries) {
-        entries[key]?.takeIf { version in it.from..it.until }?.bytes
+    fun cached(key: String, version: Long): LeasedValue? = synchronized(entries) {
+        entries[key]?.takeIf { version in it.from..it.until }?.let { LeasedValue(it.bytes, it.until) }
     }
 
     fun decode(key: String, value: ByteArray): Table = synchronized(entries) {
@@ -21,18 +23,33 @@ internal class CatalogCache(private val db: Storage) {
     } ?: Records.table(value)
 
     fun read(snapshot: Snapshot, key: String): ByteArray? =
-        cached(key, snapshot.version) ?: load(snapshot, key) ?: db.directRead(snapshot, key)
+        leased(snapshot, key)?.bytes ?: db.directRead(snapshot, key)
 
-    private fun load(snapshot: Snapshot, key: String): ByteArray? =
-        synchronized(loaders[(key.hashCode() and Int.MAX_VALUE) % LOCKS]) {
+    fun leased(snapshot: Snapshot, key: String): LeasedValue? {
+        val current = cached(key, snapshot.version)
+        if (current != null && current.until - snapshot.version > RENEW_AHEAD) return current
+        return load(snapshot, key) ?: current
+    }
+
+    private fun load(snapshot: Snapshot, key: String): LeasedValue? {
+        val loader = loaders[(key.hashCode() and Int.MAX_VALUE) % LOCKS]
+        // A renewal must not queue unrelated requests behind its TiKV RPCs.
+        if (!loader.tryLock()) return null
+        return try {
             val previous = synchronized(entries) { entries[key] }
-            if (previous != null && snapshot.version <= previous.until) {
-                previous.takeIf { snapshot.version >= it.from }?.bytes
-            } else {
-                acquire(key)?.also { remember(key, it) }
-                    ?.takeIf { snapshot.version in it.from..it.until }?.bytes
+            when {
+                previous != null && snapshot.version < previous.from -> null
+                previous != null && previous.until - snapshot.version > RENEW_AHEAD ->
+                    LeasedValue(previous.bytes, previous.until)
+                else -> {
+                    acquire(key)?.let { remember(key, it) }
+                    cached(key, snapshot.version)
+                }
             }
+        } finally {
+            loader.unlock()
         }
+    }
 
     private fun acquire(key: String): Entry? = db.uncachedAtomic { tx ->
         val leaseKey = CatalogLeases.key(key)
@@ -42,7 +59,8 @@ internal class CatalogCache(private val db: Storage) {
         val table = decode(key, value)
         // Backfill checkpoints change on every row; caching them delays progress without benefit.
         if (table.indexes.any { it.status == "CREATING" }) return@uncachedAtomic null
-        val until = if (lease.until > tx.version) lease.until else tx.version + CatalogLeases.DURATION
+        val until = if (lease.until - tx.version > RENEW_AHEAD) lease.until
+            else tx.version + CatalogLeases.DURATION
         if (until != lease.until) tx.write(leaseKey, CatalogLeases.encode(CatalogLease(until)))
         Entry(value, table, tx.version, until)
     }
@@ -77,8 +95,11 @@ internal class CatalogCache(private val db: Storage) {
     }
 
     private fun remember(key: String, entry: Entry) = synchronized(entries) {
-        bytes -= entries.remove(key)?.bytes?.size ?: 0
-        entries[key] = entry
+        val previous = entries.remove(key)
+        bytes -= previous?.bytes?.size ?: 0
+        // Only uninterrupted leases can extend an older snapshot's commit ceiling.
+        entries[key] = if (previous != null && entry.from <= previous.until &&
+            previous.bytes.contentEquals(entry.bytes)) entry.copy(from = previous.from) else entry
         bytes += entry.bytes.size
         while (entries.size > MAX_ENTRIES || bytes > MAX_BYTES) {
             val oldest = entries.entries.iterator()
@@ -102,5 +123,6 @@ internal class CatalogCache(private val db: Storage) {
         private const val MAX_BYTES = 16 * 1024 * 1024
         private const val WARMUP_TABLES = 64
         private const val DRAIN_POLL_MS = 25L
+        private const val RENEW_AHEAD = CatalogLeases.DURATION / 2
     }
 }

@@ -16,10 +16,12 @@ internal class SingleKeyCommit(
     private val session: TiSession,
     private val timestamp: () -> TiTimestamp = { session.timestamp },
 ) {
-    fun commit(key: ByteString, startTs: Long, initialCommitTs: Long): Long {
+    fun commit(key: ByteString, startTs: Long, initialCommitTs: Long, ceiling: Long = Long.MAX_VALUE): Long {
         val budget = ConcreteBackOffer.newCustomBackOff(COMMIT_BUDGET_MS)
         var commitTs = initialCommitTs
         while (true) {
+            // Only reached before sending, or after an explicit rejection/region error.
+            if (commitTs > ceiling) throw CommitRefused()
             try {
                 session.regionStoreClientBuilder.build(key, budget).use { client ->
                     client.commit(budget, listOf(key), startTs, commitTs)
@@ -40,3 +42,5 @@ internal class SingleKeyCommit(
         private const val COMMIT_BUDGET_MS = 3000
     }
 }
+
+internal class CommitRefused : RuntimeException()

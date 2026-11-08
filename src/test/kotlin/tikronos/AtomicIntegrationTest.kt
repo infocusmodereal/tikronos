@@ -7,6 +7,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executor
 import org.tikv.kvproto.TikvGrpc
 import kotlin.test.assertNull
 import org.junit.jupiter.api.Tag
@@ -21,6 +22,32 @@ import org.tikv.kvproto.Kvrpcpb
 
 @Tag("tikv")
 class AtomicIntegrationTest {
+    @Test
+    fun `deferred completion preserves visibility and native guard recovery`() = withStorage { db, session ->
+        val prefix = "tikronos-test/${UUID.randomUUID()}/"
+        val config = prefix + "config"
+        val item = prefix + "item"
+        val event = prefix + "event"
+        db.mutate(config) { byteArrayOf(1) }
+        val before = db.snapshot()
+        val tasks = mutableListOf<Runnable>()
+        val tx = db.transaction()
+        tx.read(config)
+        tx.write(item, byteArrayOf(2))
+        tx.write(event, byteArrayOf(2))
+        assertTrue(AtomicCommit(session, Executor { tasks.add(it) })
+            .commit(tx.version, tx.writes, tx.guards()))
+        assertTrue(tasks.size == 1)
+        // No queued cleanup has run: readers and writers must recover using the primary decision.
+        db.mutate(config) { byteArrayOf(3) }
+        for (key in listOf(item, event)) {
+            assertNull(db.read(before, key))
+            assertContentEquals(byteArrayOf(2), db.read(db.snapshot(), key))
+        }
+        tasks.single().run()
+        db.atomic { current -> listOf(config, item, event).forEach { current.write(it, null) } }
+    }
+
     @Test
     fun `secondary conflict rolls back the primary without exposing a partial mutation`() = withStorage { db, session ->
         val prefix = "tikronos-test/${UUID.randomUUID()}/"

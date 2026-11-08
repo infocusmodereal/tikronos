@@ -34,6 +34,8 @@ internal class Ttl(private val db: Storage) {
             if (!enabled && (old?.enabled != true || old.attribute != attribute))
                 invalid("TTL is not enabled for this attribute")
             val state = TtlState(name, table.id, attribute, enabled, UUID.randomUUID().toString())
+            // Semantic TTL changes drain item writers' catalog leases; cursor progress does not.
+            tx.write(Storage.CATALOG + name, Records.encodeTable(table))
             tx.write(TtlRecords.config(table.id), TtlRecords.encode(state))
         }
         return obj("TimeToLiveSpecification" to spec)

@@ -33,14 +33,23 @@ internal class Streams(private val db: Storage) {
         val state = StreamState(arn, label, table.name, table.id, requireNotNull(view),
             Instant.now().epochSecond,
             listOfNotNull(table.partitionKey to "HASH", table.sortKey?.let { it to "RANGE" }))
+        touchCatalog(tx, table)
         tx.write(StreamRecords.descriptor(arn), StreamRecords.encode(state))
         tx.write(StreamRecords.config(table.id), arn.encodeToByteArray())
     }
 
     fun disable(tx: Transaction, table: Table) {
         val state = current(tx, table) ?: return
-        if (state.enabled) tx.write(StreamRecords.descriptor(state.arn),
-            StreamRecords.encode(state.copy(enabled = false, closedAt = Instant.now().epochSecond)))
+        if (state.enabled) {
+            touchCatalog(tx, table)
+            tx.write(StreamRecords.descriptor(state.arn),
+                StreamRecords.encode(state.copy(enabled = false, closedAt = Instant.now().epochSecond)))
+        }
+    }
+
+    private fun touchCatalog(tx: Transaction, table: Table) {
+        val key = Storage.CATALOG + table.name
+        tx.write(key, checkNotNull(tx.read(key)))
     }
 
     fun decorate(table: Table, description: ObjectNode): ObjectNode {
@@ -69,6 +78,8 @@ internal class Streams(private val db: Storage) {
 
     private fun current(tx: Transaction, table: Table): StreamState? {
         val arn = tx.read(StreamRecords.config(table.id))?.decodeToString() ?: return null
+        // Enable/disable also writes the catalog. Active head updates remain conflict-checked writes.
+        tx.coveredBy(Storage.CATALOG + table.name, listOf(StreamRecords.descriptor(arn)))
         return tx.read(StreamRecords.descriptor(arn))?.let(StreamRecords::decode)
     }
 
