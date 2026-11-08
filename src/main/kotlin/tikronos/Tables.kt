@@ -13,10 +13,11 @@ import tikronos.storage.Transaction
 internal class Tables(private val db: Storage) {
     private val streams = Streams(db)
     fun find(name: String, snapshot: Snapshot = db.snapshot()): Table =
-        db.read(snapshot, Storage.CATALOG + name)?.let(Records::table) ?: missing(name)
+        db.read(snapshot, Storage.CATALOG + name)
+            ?.let { db.catalog.decode(Storage.CATALOG + name, it) } ?: missing(name)
 
     fun find(name: String, tx: Transaction): Table =
-        tx.read(Storage.CATALOG + name)?.let(Records::table) ?: missing(name)
+        tx.table(name) ?: missing(name)
 
     fun describe(req: ObjectNode): ObjectNode {
         req.fieldsOnly("TableName")
@@ -63,7 +64,7 @@ internal class Tables(private val db: Storage) {
         req.fieldsOnly("TableName")
         val name = tableName(req)
         val table = db.atomic { tx ->
-            val table = tx.read(Storage.CATALOG + name)?.let(Records::table) ?: missing(name)
+            val table = tx.table(name) ?: missing(name)
             streams.disable(tx, table)
             tx.write(TtlRecords.config(table.id), null)
             tx.write(Storage.CATALOG + name, null)
@@ -78,7 +79,7 @@ internal class Tables(private val db: Storage) {
         val name = tableName(req)
         if (req.size() == 1) invalid("UpdateTable requires an update")
         val table = db.atomic { tx ->
-            val old = tx.read(Storage.CATALOG + name)?.let(Records::table) ?: missing(name)
+            val old = tx.table(name) ?: missing(name)
             val changed = updateCatalog(req, old)
             if (req.has("StreamSpecification"))
                 streams.configure(tx, changed, req.obj("StreamSpecification"))

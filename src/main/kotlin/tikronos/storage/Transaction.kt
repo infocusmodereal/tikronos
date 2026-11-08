@@ -1,12 +1,14 @@
 package tikronos.storage
 
 import org.tikv.common.Snapshot
+import tikronos.model.Table
 
 /** Point reads acquire validation locks; metadata uses striped validation fences. */
 internal class Transaction(
     private val snapshot: Snapshot,
     private val storage: Storage,
     internal val started: Long = System.nanoTime(),
+    private val cached: Boolean = true,
 ) {
     val version: Long get() = snapshot.version
     private val reads = linkedMapOf<String, ByteArray?>()
@@ -14,6 +16,8 @@ internal class Transaction(
     private var scope: String? = null
 
     fun prefetch(keys: List<String>) {
+        if (cached) keys.filter { it.startsWith(Storage.CATALOG) && it !in reads && it !in writes }
+            .forEach { key -> storage.catalog.cached(key, version)?.let { reads[key] = it } }
         val missing = keys.distinct().filter { it !in reads && it !in writes }
         if (missing.isEmpty()) return
         val found = snapshot.batchGet(READ_BUDGET_MS, missing.map(String::encodeToByteArray))
@@ -23,8 +27,14 @@ internal class Transaction(
 
     fun read(key: String): ByteArray? {
         if (writes.containsKey(key)) return writes[key]
-        if (!reads.containsKey(key)) reads[key] = storage.read(snapshot, key)
+        if (!reads.containsKey(key)) reads[key] =
+            if (cached) storage.read(snapshot, key) else storage.directRead(snapshot, key)
         return reads[key]
+    }
+
+    fun table(name: String): Table? {
+        val key = Storage.CATALOG + name
+        return read(key)?.let { storage.catalog.decode(key, it) }
     }
 
     fun write(key: String, value: ByteArray?) {

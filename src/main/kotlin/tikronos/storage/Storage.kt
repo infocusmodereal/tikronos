@@ -5,6 +5,7 @@ import org.tikv.common.TiSession
 
 internal class Storage(private val session: TiSession) {
     private val timestamps = TimestampOracle(session.pdClient)
+    val catalog = CatalogCache(this)
 
     fun snapshot(): Snapshot = session.createSnapshot(timestamps.next())
 
@@ -14,6 +15,9 @@ internal class Storage(private val session: TiSession) {
     }
 
     fun read(snapshot: Snapshot, key: String): ByteArray? =
+        if (key.startsWith(CATALOG)) catalog.read(snapshot, key) else directRead(snapshot, key)
+
+    internal fun directRead(snapshot: Snapshot, key: String): ByteArray? =
         snapshot.get(key.encodeToByteArray()).takeIf { it.isNotEmpty() }
 
     val ranges = RangeReader(session)
@@ -27,11 +31,20 @@ internal class Storage(private val session: TiSession) {
             .toList()
     }
 
-    fun <T> atomic(initial: Transaction? = null, change: (Transaction) -> T): T {
+    fun <T> atomic(initial: Transaction? = null, change: (Transaction) -> T): T =
+        commit(initial, cached = true, change)
+
+    internal fun <T> uncachedAtomic(change: (Transaction) -> T): T = commit(null, cached = false, change)
+
+    private fun <T> commit(initial: Transaction?, cached: Boolean, change: (Transaction) -> T): T {
         repeat(MAX_ATTEMPTS) {
-            val tx = if (it == 0 && initial != null) initial else transaction()
+            val tx = if (it == 0 && initial != null) initial else Transaction(snapshot(), this, cached = cached)
             val result = change(tx)
+            check(cached || tx.writes.keys.none { key -> key.startsWith(CATALOG) }) {
+                "Catalog mutations must participate in cache invalidation"
+            }
             if (tx.writes.isEmpty()) return result
+            if (cached && !catalog.prepare(tx)) return@repeat
             val committed = AtomicCommit(session, timestamps::next)
                 .commit(tx.version, tx.writes, tx.guards(), tx.started)
             if (committed) return result

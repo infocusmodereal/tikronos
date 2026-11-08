@@ -92,6 +92,7 @@ fun main(args: Array<String>) {
     }
     Runtime.getRuntime().addShutdownHook(shutdown)
     try {
+        storage.catalog.warmup()
         server.start(wait = false)
         maintenance.start()
     } catch (error: Exception) {
