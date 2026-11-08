@@ -5,6 +5,7 @@ import java.time.Instant
 import java.util.UUID
 import tikronos.codec.wireItem
 import tikronos.model.Item
+import tikronos.model.TableWritePlan
 import tikronos.model.StreamState
 import tikronos.model.Table
 import tikronos.model.itemSize
@@ -66,9 +67,10 @@ internal class Streams(private val db: Storage) {
         return description
     }
 
-    fun record(tx: Transaction, table: Table, old: Item?, new: Item?, ttl: Boolean = false) {
+    fun record(tx: Transaction, plan: TableWritePlan, old: Item?, new: Item?, ttl: Boolean = false) {
         if (old == new) return
-        val state = current(tx, table)?.takeIf { it.enabled } ?: return
+        val table = plan.table
+        val state = plan.streamArn?.let { current(tx, table, it) }?.takeIf { it.enabled } ?: return
         val seq = tx.version
         check(seq > state.head) { "Stream sequence must follow its committed predecessor" }
         val event = table.event(state, old, new, seq, ttl)
@@ -78,6 +80,10 @@ internal class Streams(private val db: Storage) {
 
     private fun current(tx: Transaction, table: Table): StreamState? {
         val arn = tx.read(StreamRecords.config(table.id))?.decodeToString() ?: return null
+        return current(tx, table, arn)
+    }
+
+    private fun current(tx: Transaction, table: Table, arn: String): StreamState? {
         // Enable/disable also writes the catalog. Active head updates remain conflict-checked writes.
         tx.coveredBy(Storage.CATALOG + table.name, listOf(StreamRecords.descriptor(arn)))
         return tx.read(StreamRecords.descriptor(arn))?.let(StreamRecords::decode)

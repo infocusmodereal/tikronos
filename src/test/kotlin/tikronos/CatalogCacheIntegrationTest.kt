@@ -13,8 +13,13 @@ import org.tikv.common.TiSession
 import tikronos.model.Table
 import tikronos.model.CatalogLease
 import tikronos.model.Value
+import tikronos.model.WriteIntent
+import tikronos.model.PreviousItem
 import tikronos.storage.address
 import tikronos.storage.TtlRecords
+import tikronos.storage.StreamRecords
+import tikronos.storage.Transaction
+import tikronos.storage.loadWritePlan
 import tikronos.storage.CatalogLeases
 import tikronos.storage.AtomicCommit
 import tikronos.storage.Records
@@ -53,11 +58,12 @@ class CatalogCacheIntegrationTest {
     fun `expired leased attempt retries with full validation rather than starving a long write`() =
         fixture { first, _, _, table ->
             first.catalog.warmup()
-            val item = "tikronos-test/cache/${table.id}"
+            val key = mapOf("pk" to Value.text("row"))
+            val item = table.address(key)
             var attempts = 0
             first.atomic { tx ->
-                assertNotNull(tx.table(table.name))
-                tx.write(item, byteArrayOf(1))
+                val result = ItemWriter(first).change(tx, table, key, WriteIntent.Replace(key))
+                assertEquals(PreviousItem.Unread, result.previous)
                 val validation = tx.validation()
                 if (attempts++ == 0) {
                     assertTrue(validation.commitCeiling < Long.MAX_VALUE)
@@ -77,7 +83,7 @@ class CatalogCacheIntegrationTest {
             first.catalog.warmup()
             val tx = first.transaction()
             val key = mapOf("pk" to Value.text("row"))
-            ItemWriter(first).change(tx, table, key) { key }
+            ItemWriter(first).change(tx, table, key, WriteIntent.Replace(key))
             val validation = tx.validation()
             assertTrue(validation.guards.isEmpty())
             assertTrue(validation.commitCeiling < Long.MAX_VALUE)
@@ -96,7 +102,7 @@ class CatalogCacheIntegrationTest {
             val tx = first.transaction()
             val key = mapOf("pk" to Value.text("row"))
             val item = key + ("expires" to Value.number("2000000000".toBigDecimal()))
-            ItemWriter(first).change(tx, table, key) { item }
+            ItemWriter(first).change(tx, table, key, WriteIntent.Replace(item))
             val validation = tx.validation()
             assertTrue(validation.guards.isEmpty())
             Ttl(second).update(obj("TableName" to table.name, "TimeToLiveSpecification" to
@@ -104,9 +110,14 @@ class CatalogCacheIntegrationTest {
             assertFalse(AtomicCommit(session).commit(tx.version, tx.writes, validation.guards,
                 ceiling = validation.commitCeiling))
             val retry = first.transaction()
-            ItemWriter(first).change(retry, table, key) { item }
+            ItemWriter(first).change(retry, table, key, WriteIntent.Replace(item))
             assertTrue(retry.writes.size > 1)
             assertTrue(retry.writes.keys.any { it != table.address(key) })
+            Ttl(second).update(obj("TableName" to table.name, "TimeToLiveSpecification" to
+                obj("AttributeName" to "expires", "Enabled" to false)))
+            val disabled = first.transaction()
+            assertEquals(PreviousItem.Unread,
+                ItemWriter(first).change(disabled, table, key, WriteIntent.Replace(item)).previous)
             second.atomic { it.write(TtlRecords.config(table.id), null) }
         }
 
@@ -170,6 +181,95 @@ class CatalogCacheIntegrationTest {
             assertNotNull(first.catalog.cached(key, first.snapshot().version))
             assertFalse(AtomicCommit(session).commit(ddl.version, ddl.writes, ddl.guards()))
             assertEquals(table, Tables(first).find(table.name))
+        }
+
+    @Test
+    fun `unread replacements retain native conflicts and capacity requests read the old item`() =
+        fixture { first, _, session, table ->
+            first.catalog.warmup()
+            val key = mapOf("pk" to Value.text("row"))
+            val item = key + ("data" to Value.text("x".repeat(2048)))
+            val writer = ItemWriter(first)
+            val stale = first.transaction()
+            val planned = writer.change(stale, table, key, WriteIntent.Replace(key))
+            assertEquals(PreviousItem.Unread, planned.previous)
+            assertTrue(stale.validation().guards.isEmpty())
+            writer.mutate(table, key, WriteIntent.Replace(item))
+            assertFalse(AtomicCommit(session).commit(stale.version, stale.writes, stale.validation().guards))
+            val response = Items(first, Tables(first)).write(obj("TableName" to table.name,
+                "Item" to obj("pk" to obj("S" to "row")), "ReturnConsumedCapacity" to "TOTAL"), "PutItem")
+            assertFalse(response.has("Attributes"))
+            assertEquals(3.0, response["ConsumedCapacity"]["CapacityUnits"].doubleValue())
+            val removed = Items(first, Tables(first)).write(obj("TableName" to table.name,
+                "Key" to obj("pk" to obj("S" to "row")), "ReturnValues" to "ALL_OLD"), "DeleteItem")
+            assertEquals("row", removed["Attributes"]["pk"]["S"].textValue())
+        }
+
+    @Test
+    fun `stream enable invalidates an absent plan and retries preserve images and fresh heads`() =
+        fixture { first, second, session, table ->
+            first.catalog.warmup()
+            val key = mapOf("pk" to Value.text("row"))
+            val writer = ItemWriter(first)
+            writer.mutate(table, key, WriteIntent.Replace(key))
+            val stale = first.transaction()
+            writer.change(stale, table, key, WriteIntent.Replace(null))
+            second.atomic { Streams(second).configure(it, table,
+                obj("StreamEnabled" to true, "StreamViewType" to "NEW_AND_OLD_IMAGES")) }
+            val validation = stale.validation()
+            assertFalse(AtomicCommit(session).commit(stale.version, stale.writes, validation.guards,
+                ceiling = validation.commitCeiling))
+            val result = writer.mutate(table, key, WriteIntent.Replace(null))
+            assertEquals(key, result.old)
+            writer.mutate(table, key, WriteIntent.Replace(key))
+            val arn = Streams(second).decorate(table, obj()).string("LatestStreamArn")
+            val state = StreamRecords.decode(checkNotNull(first.read(first.snapshot(),
+                StreamRecords.descriptor(arn))))
+            val prefix = StreamRecords.events(state)
+            val events = first.ranges.scan(tikronos.storage.bytes(prefix),
+                tikronos.storage.prefixEnd(prefix), true).map { json.readTree(it.value.toByteArray()) }.toList()
+            assertEquals(listOf("REMOVE", "INSERT"), events.map { it["eventName"].asText() })
+            second.atomic { Streams(second).disable(it, table) }
+            assertEquals(PreviousItem.Unread, writer.mutate(table, key, WriteIntent.Replace(null)).previous)
+            second.atomic { tx ->
+                tx.write(StreamRecords.config(table.id), null)
+                tx.write(StreamRecords.descriptor(arn), null)
+            }
+        }
+
+    @Test
+    fun `lease acquisition ignores operational progress but still validates semantic changes`() =
+        fixture { first, second, session, table ->
+            second.atomic { Streams(second).configure(it, table,
+                obj("StreamEnabled" to true, "StreamViewType" to "KEYS_ONLY")) }
+            Ttl(second).update(obj("TableName" to table.name, "TimeToLiveSpecification" to
+                obj("AttributeName" to "expires", "Enabled" to true)))
+            val tx = Transaction(first.snapshot(), first, cached = false)
+            val current = assertNotNull(tx.table(table.name))
+            val plan = tx.loadWritePlan(current)
+            val leaseKey = CatalogLeases.key(Storage.CATALOG + table.name)
+            tx.read(leaseKey)
+            tx.write(leaseKey, CatalogLeases.encode(CatalogLease(tx.version + CatalogLeases.DURATION)))
+            val descriptor = StreamRecords.descriptor(checkNotNull(plan.streamArn))
+            val ttlKey = TtlRecords.config(table.id)
+            second.uncachedAtomic { progress ->
+                val stream = StreamRecords.decode(checkNotNull(progress.read(descriptor)))
+                progress.write(descriptor, StreamRecords.encode(stream.copy(head = progress.version)))
+                val state = TtlRecords.state(checkNotNull(progress.read(ttlKey)))
+                progress.write(ttlKey, TtlRecords.encode(state.copy(cursor = "progress")))
+            }
+            // This executes the same snapshot loader and native commit used by cache acquisition.
+            assertEquals(1, tx.validation().guards.size)
+            assertFalse(tx.validation().guards.contains(descriptor))
+            assertTrue(AtomicCommit(session).commit(tx.version, tx.writes, tx.validation().guards))
+            Ttl(second).update(obj("TableName" to table.name, "TimeToLiveSpecification" to
+                obj("AttributeName" to "expires", "Enabled" to false)))
+            second.atomic { Streams(second).disable(it, table) }
+            second.atomic { progress ->
+                progress.write(descriptor, null)
+                progress.write(StreamRecords.config(table.id), null)
+                progress.write(ttlKey, null)
+            }
         }
 
     private fun fixture(test: (Storage, Storage, TiSession, Table) -> Unit) {

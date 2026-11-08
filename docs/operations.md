@@ -13,8 +13,8 @@ On startup the service discovers and warms up to 64 existing tables before openi
 remaining tables load on demand. Restarting against the same cluster preserves schemas and data.
 Arbitrary RawKV keys and TiDB tables do not contain this catalog and are not automatically imported.
 
-Each process caches decoded definitions, bounded to 4,096 entries and 16 MiB of encoded records
-(decoded objects add heap overhead). A one-second, per-table read lease uses PD timestamps.
+Each process caches definitions and semantic TTL/stream settings, including their absence, bounded
+to 4,096 entries and 16 MiB of record and setting data (decoded objects add heap overhead). A one-second, per-table read lease uses PD timestamps.
 Renewal and schema changes conflict through native TiKV transactions. A schema writer blocks
 renewal and waits for existing leases to expire before committing; schema changes can therefore
 add approximately one second of latency. Abandoned renewal blocks expire after ten seconds.
@@ -28,6 +28,9 @@ the lease. Expiry, including a reader pushing the minimum commit timestamp past 
 causes an explicit abort and retry with full validation. Transport-ambiguous commits are never
 replayed. TTL and stream configuration changes also drain the catalog lease; maintenance-only
 cursor progress does not change item-write semantics. Uncovered reads retain metadata fences.
+The cache excludes worker cursors and mutable stream heads. Unconditional Put/Delete operations
+skip the previous-item read when indexes, TTL, Streams, return values and capacity reporting do
+not require it; TiKV still checks write conflicts.
 The same storage gate covers API schema changes, tags, index checkpoints, and deletion/recreation.
 
 ## Health and shutdown

@@ -17,6 +17,8 @@ internal class Capacity(req: ObjectNode) {
         if (mode !in setOf("TOTAL", "INDEXES", "NONE")) invalid("Invalid ReturnConsumedCapacity")
     }
 
+    val requested: Boolean get() = mode != "NONE"
+
     private fun entry(table: String, usage: CapacityUnits): ObjectNode =
         obj("TableName" to table, "CapacityUnits" to usage.total).apply {
             if (mode == "INDEXES") {

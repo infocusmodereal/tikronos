@@ -2,6 +2,7 @@ package tikronos.storage
 
 import org.tikv.common.Snapshot
 import tikronos.model.Table
+import tikronos.model.TableWritePlan
 import tikronos.model.LeasedValue
 import tikronos.model.ReadValidation
 
@@ -17,6 +18,7 @@ internal class Transaction(
     private val reads = linkedMapOf<String, ByteArray?>()
     internal val writes = linkedMapOf<String, ByteArray?>()
     private var scope: String? = null
+    private val plans = mutableMapOf<String, TableWritePlan>()
     private val covered = mutableSetOf<String>()
     private var ceiling = Long.MAX_VALUE
 
@@ -45,6 +47,12 @@ internal class Transaction(
         return read(key)?.let { storage.catalog.decode(key, it) }
     }
 
+    fun writePlan(name: String): TableWritePlan? {
+        val table = table(name) ?: return null
+        // Read-your-writes takes precedence over any leased configuration.
+        return plans[Storage.CATALOG + name]?.takeIf { writes.isEmpty() } ?: loadWritePlan(table)
+    }
+
     fun write(key: String, value: ByteArray?) {
         require(value == null || value.isNotEmpty()) { "Empty values are reserved for absence" }
         writes[key] = value
@@ -59,13 +67,14 @@ internal class Transaction(
 
     private fun remember(key: String, lease: LeasedValue) {
         reads[key] = lease.bytes
+        plans[key] = lease.plan
         covered += key
         ceiling = minOf(ceiling, lease.until)
     }
 
-    /** Only for dependencies whose semantic changes also drain this catalog lease. */
+    /** Semantic changes must rewrite this catalog key, protected by its fence or lease. */
     fun coveredBy(catalog: String, keys: List<String>) {
-        if (catalog in covered) covered.addAll(keys)
+        if (catalog in reads) covered.addAll(keys)
     }
 
     internal fun validation() = ReadValidation(
