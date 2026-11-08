@@ -12,6 +12,9 @@ import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
 import tikronos.model.Table
 import tikronos.model.CatalogLease
+import tikronos.model.Value
+import tikronos.storage.address
+import tikronos.storage.TtlRecords
 import tikronos.storage.CatalogLeases
 import tikronos.storage.AtomicCommit
 import tikronos.storage.Records
@@ -19,6 +22,67 @@ import tikronos.storage.Storage
 
 @Tag("tikv")
 class CatalogCacheIntegrationTest {
+    @Test
+    fun `expired leased attempt retries with full validation rather than starving a long write`() =
+        fixture { first, _, _, table ->
+            first.catalog.warmup()
+            val item = "tikronos-test/cache/${table.id}"
+            var attempts = 0
+            first.atomic { tx ->
+                assertNotNull(tx.table(table.name))
+                tx.write(item, byteArrayOf(1))
+                val validation = tx.validation()
+                if (attempts++ == 0) {
+                    assertTrue(validation.commitCeiling < Long.MAX_VALUE)
+                    while (first.snapshot().version <= validation.commitCeiling) Thread.sleep(25)
+                } else {
+                    assertEquals(Long.MAX_VALUE, validation.commitCeiling)
+                    assertTrue(validation.guards.isNotEmpty())
+                }
+            }
+            assertEquals(2, attempts)
+            first.mutate(item) { null }
+        }
+
+    @Test
+    fun `plain leased writes avoid metadata locks and refuse commit after schema replacement`() =
+        fixture { first, second, session, table ->
+            first.catalog.warmup()
+            val tx = first.transaction()
+            val key = mapOf("pk" to Value.text("row"))
+            ItemWriter(first).change(tx, table, key) { key }
+            val validation = tx.validation()
+            assertTrue(validation.guards.isEmpty())
+            assertTrue(validation.commitCeiling < Long.MAX_VALUE)
+            assertEquals(setOf(table.address(key)), tx.writes.keys)
+            second.atomic { it.write(Storage.CATALOG + table.name,
+                Records.encodeTable(table.copy(id = UUID.randomUUID().toString()))) }
+            assertFalse(AtomicCommit(session).commit(tx.version, tx.writes, validation.guards,
+                ceiling = validation.commitCeiling))
+            assertNull(first.read(first.snapshot(), table.address(key)))
+        }
+
+    @Test
+    fun `TTL enable drains leased writes and retry records the expiration candidate`() =
+        fixture { first, second, session, table ->
+            first.catalog.warmup()
+            val tx = first.transaction()
+            val key = mapOf("pk" to Value.text("row"))
+            val item = key + ("expires" to Value.number("2000000000".toBigDecimal()))
+            ItemWriter(first).change(tx, table, key) { item }
+            val validation = tx.validation()
+            assertTrue(validation.guards.isEmpty())
+            Ttl(second).update(obj("TableName" to table.name, "TimeToLiveSpecification" to
+                obj("AttributeName" to "expires", "Enabled" to true)))
+            assertFalse(AtomicCommit(session).commit(tx.version, tx.writes, validation.guards,
+                ceiling = validation.commitCeiling))
+            val retry = first.transaction()
+            ItemWriter(first).change(retry, table, key) { item }
+            assertTrue(retry.writes.size > 1)
+            assertTrue(retry.writes.keys.any { it != table.address(key) })
+            second.atomic { it.write(TtlRecords.config(table.id), null) }
+        }
+
     @Test
     fun `another instance drains cached definitions and stale writes still conflict`() =
         fixture { first, second, session, table ->

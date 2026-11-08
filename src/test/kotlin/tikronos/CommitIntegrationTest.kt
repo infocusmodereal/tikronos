@@ -4,6 +4,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 import org.junit.jupiter.api.Tag
 import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
@@ -11,9 +12,30 @@ import org.tikv.common.util.ConcreteBackOffer
 import org.tikv.shade.com.google.protobuf.ByteString
 import org.tikv.txn.TwoPhaseCommitter
 import tikronos.storage.SingleKeyCommit
+import tikronos.storage.CommitRefused
+import tikronos.storage.TransactionResolution
 
 @Tag("tikv")
 class CommitIntegrationTest {
+    @Test
+    fun `pushed minimum commit timestamp cannot cross a catalog lease ceiling`() {
+        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
+        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
+            val key = ByteString.copyFromUtf8("tikronos-test/" + UUID.randomUUID())
+            val start = session.timestamp.version
+            TwoPhaseCommitter(session, start).use { txn ->
+                txn.prewritePrimaryKey(budget(), key.toByteArray(), byteArrayOf(1))
+                val ceiling = session.timestamp.version
+                assertTrue(session.createSnapshot().get(key).isEmpty)
+                assertFailsWith<CommitRefused> {
+                    SingleKeyCommit(session).commit(key, start, ceiling, ceiling)
+                }
+                TransactionResolution(session).resolve(key, start, 0)
+                assertTrue(session.createSnapshot().get(key).isEmpty)
+            }
+        }
+    }
+
     @Test
     fun `reader pushing minimum commit timestamp does not lose or repeat the prepared write`() {
         val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"

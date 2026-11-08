@@ -4,6 +4,7 @@ import java.util.LinkedHashMap
 import org.tikv.common.Snapshot
 import tikronos.model.Table
 import tikronos.model.CatalogLease
+import tikronos.model.LeasedValue
 
 /** Read leases amortize catalog RPCs; TiKV transactions arbitrate renewal against catalog writers. */
 internal class CatalogCache(private val db: Storage) {
@@ -12,8 +13,8 @@ internal class CatalogCache(private val db: Storage) {
     private val loaders = Array(LOCKS) { Any() }
     private var bytes = 0L
 
-    fun cached(key: String, version: Long): ByteArray? = synchronized(entries) {
-        entries[key]?.takeIf { version in it.from..it.until }?.bytes
+    fun cached(key: String, version: Long): LeasedValue? = synchronized(entries) {
+        entries[key]?.takeIf { version in it.from..it.until }?.let { LeasedValue(it.bytes, it.until) }
     }
 
     fun decode(key: String, value: ByteArray): Table = synchronized(entries) {
@@ -21,16 +22,19 @@ internal class CatalogCache(private val db: Storage) {
     } ?: Records.table(value)
 
     fun read(snapshot: Snapshot, key: String): ByteArray? =
-        cached(key, snapshot.version) ?: load(snapshot, key) ?: db.directRead(snapshot, key)
+        leased(snapshot, key)?.bytes ?: db.directRead(snapshot, key)
 
-    private fun load(snapshot: Snapshot, key: String): ByteArray? =
+    fun leased(snapshot: Snapshot, key: String): LeasedValue? =
+        cached(key, snapshot.version) ?: load(snapshot, key)
+
+    private fun load(snapshot: Snapshot, key: String): LeasedValue? =
         synchronized(loaders[(key.hashCode() and Int.MAX_VALUE) % LOCKS]) {
             val previous = synchronized(entries) { entries[key] }
             if (previous != null && snapshot.version <= previous.until) {
-                previous.takeIf { snapshot.version >= it.from }?.bytes
+                previous.takeIf { snapshot.version >= it.from }?.let { LeasedValue(it.bytes, it.until) }
             } else {
                 acquire(key)?.also { remember(key, it) }
-                    ?.takeIf { snapshot.version in it.from..it.until }?.bytes
+                    ?.takeIf { snapshot.version in it.from..it.until }?.let { LeasedValue(it.bytes, it.until) }
             }
         }
 

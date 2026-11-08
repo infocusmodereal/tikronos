@@ -41,17 +41,22 @@ internal class Storage(
     internal fun <T> uncachedAtomic(change: (Transaction) -> T): T = commit(null, cached = false, change)
 
     private fun <T> commit(initial: Transaction?, cached: Boolean, change: (Transaction) -> T): T {
+        var allowLeases = cached
         repeat(MAX_ATTEMPTS) {
-            val tx = if (it == 0 && initial != null) initial else Transaction(snapshot(), this, cached = cached)
+            val tx = if (it == 0 && initial != null) initial else
+                Transaction(snapshot(), this, cached = cached, allowLeases = allowLeases)
             val result = change(tx)
             check(cached || tx.writes.keys.none { key -> key.startsWith(CATALOG) }) {
                 "Catalog mutations must participate in cache invalidation"
             }
             if (tx.writes.isEmpty()) return result
             if (cached && !catalog.prepare(tx)) return@repeat
+            val validation = tx.validation()
             val committed = AtomicCommit(session, cleanup, timestamps::next)
-                .commit(tx.version, tx.writes, tx.guards(), tx.started)
+                .commit(tx.version, tx.writes, validation.guards, tx.started, validation.commitCeiling)
             if (committed) return result
+            // Long or contended writes make progress using the original full-validation path.
+            if (validation.commitCeiling != Long.MAX_VALUE) allowLeases = false
         }
         throw ContentionLimitExceeded()
     }

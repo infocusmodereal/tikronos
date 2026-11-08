@@ -23,8 +23,12 @@ Tables with an index being backfilled bypass caching because their checkpoints c
 
 [TiKV MVCC](https://tikv.org/deep-dive/distributed-transaction/isolation-level/) supplies snapshot reads and write conflicts. The cache still needs coordination: snapshot
 isolation alone does not invalidate process memory or validate arbitrary read dependencies.
-Existing metadata fences protect writes that overlap schema changes. The same storage gate covers
-API schema changes, tags, index checkpoints, and deletion/recreation across instances.
+Lease-covered writes omit metadata fence locks only while their commit timestamp remains within
+the lease. Expiry, including a reader pushing the minimum commit timestamp past that limit,
+causes an explicit abort and retry with full validation. Transport-ambiguous commits are never
+replayed. TTL and stream configuration changes also drain the catalog lease; maintenance-only
+cursor progress does not change item-write semantics. Uncovered reads retain metadata fences.
+The same storage gate covers API schema changes, tags, index checkpoints, and deletion/recreation.
 
 ## Health and shutdown
 

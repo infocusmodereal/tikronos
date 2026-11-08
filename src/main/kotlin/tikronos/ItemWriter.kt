@@ -32,6 +32,8 @@ internal class ItemWriter(private val db: Storage) {
         val current = tx.table(table.name)
         if (current?.id != table.id)
             throw ApiError("ResourceNotFoundException", "Table no longer exists")
+        tx.coveredBy(Storage.CATALOG + table.name,
+            listOf(TtlRecords.config(table.id), StreamRecords.config(table.id)))
         val address = current.address(key)
         val old = tx.read(address)?.let(Records::item)
         val next = change(old)
