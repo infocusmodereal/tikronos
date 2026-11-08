@@ -14,7 +14,8 @@ remaining tables load on demand. Restarting against the same cluster preserves s
 Arbitrary RawKV keys and TiDB tables do not contain this catalog and are not automatically imported.
 
 Each process caches definitions and semantic TTL/stream settings, including their absence, bounded
-to 4,096 entries and 16 MiB of record and setting data (decoded objects add heap overhead). A one-second, per-table read lease uses PD timestamps.
+to 4,096 entries and 16 MiB of record and setting data (decoded objects add heap overhead). A one-second, per-table
+read lease uses PD timestamps.
 Renewal and schema changes conflict through native TiKV transactions. A schema writer blocks
 renewal and waits for existing leases to expire before committing; schema changes can therefore
 add approximately one second of latency. Abandoned renewal blocks expire after ten seconds.
@@ -25,9 +26,10 @@ Tables with an index being backfilled bypass caching because their checkpoints c
 isolation alone does not invalidate process memory or validate arbitrary read dependencies.
 Lease-covered writes omit metadata fence locks only while their commit timestamp remains within
 the lease. Expiry, including a reader pushing the minimum commit timestamp past that limit,
-causes an explicit abort and retry with full validation. Transport-ambiguous commits are never
+causes an explicit abort and retry with catalog fences and item validation. Transport-ambiguous commits are never
 replayed. TTL and stream configuration changes also drain the catalog lease; maintenance-only
-cursor progress does not change item-write semantics. Uncovered reads retain metadata fences.
+cursor progress does not change item-write semantics. Semantic settings share the catalog
+validation; actual stream-head and cursor writes retain native write conflicts.
 The cache excludes worker cursors and mutable stream heads. Unconditional Put/Delete operations
 skip the previous-item read when indexes, TTL, Streams, return values and capacity reporting do
 not require it; TiKV still checks write conflicts.

@@ -262,8 +262,14 @@ class CatalogCacheIntegrationTest {
             assertEquals(1, tx.validation().guards.size)
             assertFalse(tx.validation().guards.contains(descriptor))
             assertTrue(AtomicCommit(session).commit(tx.version, tx.writes, tx.validation().guards))
+            val stale = Transaction(first.snapshot(), first, cached = false)
+            stale.loadWritePlan(assertNotNull(stale.table(table.name)))
+            val item = mapOf("pk" to Value.text("stale"))
+            stale.write(table.address(item), Records.encodeItem(item))
+            assertEquals(1, stale.validation().guards.size)
             Ttl(second).update(obj("TableName" to table.name, "TimeToLiveSpecification" to
                 obj("AttributeName" to "expires", "Enabled" to false)))
+            assertFalse(AtomicCommit(session).commit(stale.version, stale.writes, stale.validation().guards))
             second.atomic { Streams(second).disable(it, table) }
             second.atomic { progress ->
                 progress.write(descriptor, null)
