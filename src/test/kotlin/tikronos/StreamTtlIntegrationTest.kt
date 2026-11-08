@@ -13,6 +13,8 @@ import org.tikv.common.TiSession
 import tikronos.model.StreamPosition
 import tikronos.model.Table
 import tikronos.model.Value
+import tikronos.model.WriteIntent
+import tikronos.model.policy
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
@@ -35,10 +37,10 @@ class StreamTtlIntegrationTest {
             val key = mapOf("pk" to Value.text("row"))
             val first = key + ("data" to Value.text("one"))
             val second = key + ("data" to Value.text("two"))
-            writer.mutate(table, key) { first }
-            writer.mutate(table, key) { second }
-            writer.mutate(table, key) { second }
-            writer.mutate(table, key) { null }
+            writer.mutate(table, key, WriteIntent.Replace(first))
+            writer.mutate(table, key, WriteIntent.Replace(second))
+            writer.mutate(table, key, WriteIntent.Replace(second))
+            writer.mutate(table, key, WriteIntent.Replace(null))
             val reads = StreamReads(db)
             val shard = reads.describe(obj("StreamArn" to arn)).path("StreamDescription").path("Shards")[0]
                 .path("ShardId").textValue()
@@ -92,7 +94,7 @@ class StreamTtlIntegrationTest {
             "TimeToLiveSpecification" to obj("Enabled" to true, "AttributeName" to "expires")))
         val ttl = Ttl(db)
         val config = TtlRecords.state(requireNotNull(db.read(db.snapshot(), TtlRecords.config(table.id))))
-        val stale = requireNotNull(ttl.candidate(config, table, old))
+        val stale = requireNotNull(ttl.candidate(checkNotNull(config.policy), table, old))
         val renewed = key + ("expires" to Value.number((now + FUTURE_SECONDS).toBigDecimal()))
         writer.mutate(table, key) { renewed }
         db.atomic { it.write(TtlRecords.address(stale, table.address(key)), TtlRecords.encode(stale)) }

@@ -4,22 +4,26 @@ import java.util.LinkedHashMap
 import java.util.concurrent.locks.ReentrantLock
 import org.tikv.common.Snapshot
 import tikronos.model.Table
+import tikronos.model.TableWritePlan
 import tikronos.model.CatalogLease
 import tikronos.model.LeasedValue
 
 /** Read leases amortize catalog RPCs; TiKV transactions arbitrate renewal against catalog writers. */
 internal class CatalogCache(private val db: Storage) {
-    private data class Entry(val bytes: ByteArray, val table: Table, val from: Long, val until: Long)
+    private data class Entry(val bytes: ByteArray, val plan: TableWritePlan, val from: Long, val until: Long) {
+        val weight: Int get() = bytes.size + (plan.streamArn?.length ?: 0) * CHAR_BYTES +
+            (plan.ttl?.let { it.attribute.length + it.generation.length } ?: 0) * CHAR_BYTES
+    }
     private val entries = LinkedHashMap<String, Entry>(INITIAL_CAPACITY, LOAD_FACTOR, true)
     private val loaders = Array(LOCKS) { ReentrantLock() }
     private var bytes = 0L
 
     fun cached(key: String, version: Long): LeasedValue? = synchronized(entries) {
-        entries[key]?.takeIf { version in it.from..it.until }?.let { LeasedValue(it.bytes, it.until) }
+        entries[key]?.takeIf { version in it.from..it.until }?.let { LeasedValue(it.bytes, it.until, it.plan) }
     }
 
     fun decode(key: String, value: ByteArray): Table = synchronized(entries) {
-        entries[key]?.takeIf { it.bytes.contentEquals(value) }?.table
+        entries[key]?.takeIf { it.bytes.contentEquals(value) }?.plan?.table
     } ?: Records.table(value)
 
     fun read(snapshot: Snapshot, key: String): ByteArray? =
@@ -40,12 +44,15 @@ internal class CatalogCache(private val db: Storage) {
             when {
                 previous != null && snapshot.version < previous.from -> null
                 previous != null && previous.until - snapshot.version > RENEW_AHEAD ->
-                    LeasedValue(previous.bytes, previous.until)
+                    LeasedValue(previous.bytes, previous.until, previous.plan)
                 else -> {
                     acquire(key)?.let { remember(key, it) }
                     cached(key, snapshot.version)
                 }
             }
+        } catch (_: ContentionLimitExceeded) {
+            // Cache acquisition is optional; the caller retains a valid lease or reads directly.
+            null
         } finally {
             loader.unlock()
         }
@@ -62,7 +69,7 @@ internal class CatalogCache(private val db: Storage) {
         val until = if (lease.until - tx.version > RENEW_AHEAD) lease.until
             else tx.version + CatalogLeases.DURATION
         if (until != lease.until) tx.write(leaseKey, CatalogLeases.encode(CatalogLease(until)))
-        Entry(value, table, tx.version, until)
+        Entry(value, tx.loadWritePlan(table), tx.version, until)
     }
 
     /** All catalog writers, including maintenance, must pass this gate before their commit. */
@@ -96,14 +103,15 @@ internal class CatalogCache(private val db: Storage) {
 
     private fun remember(key: String, entry: Entry) = synchronized(entries) {
         val previous = entries.remove(key)
-        bytes -= previous?.bytes?.size ?: 0
+        bytes -= previous?.weight ?: 0
         // Only uninterrupted leases can extend an older snapshot's commit ceiling.
-        entries[key] = if (previous != null && entry.from <= previous.until &&
-            previous.bytes.contentEquals(entry.bytes)) entry.copy(from = previous.from) else entry
-        bytes += entry.bytes.size
+        val same = previous?.bytes?.contentEquals(entry.bytes) == true && previous.plan == entry.plan
+        entries[key] = if (same && entry.from <= checkNotNull(previous).until)
+            entry.copy(from = previous.from) else entry
+        bytes += entry.weight
         while (entries.size > MAX_ENTRIES || bytes > MAX_BYTES) {
             val oldest = entries.entries.iterator()
-            bytes -= oldest.next().value.bytes.size
+            bytes -= oldest.next().value.weight
             oldest.remove()
         }
     }
@@ -116,6 +124,7 @@ internal class CatalogCache(private val db: Storage) {
     }
 
     companion object {
+        private const val CHAR_BYTES = 2
         private const val INITIAL_CAPACITY = 16
         private const val LOAD_FACTOR = 0.75f
         private const val LOCKS = 64

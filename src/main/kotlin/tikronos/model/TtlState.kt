@@ -16,3 +16,5 @@ internal data class ExpiryCandidate(
     val expiry: Long,
     val key: Item,
 )
+
+internal val TtlState.policy: TtlPolicy? get() = if (enabled) TtlPolicy(attribute, generation) else null

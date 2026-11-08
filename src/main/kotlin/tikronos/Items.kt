@@ -8,6 +8,8 @@ import tikronos.expression.RequestExpressions
 import tikronos.expression.patch
 import tikronos.expression.paths
 import tikronos.expression.project
+import tikronos.model.WriteIntent
+import tikronos.model.WriteResult
 import tikronos.model.ConditionFailed
 import tikronos.model.Item
 import tikronos.model.MAX_DEPTH
@@ -66,29 +68,32 @@ internal class Items(private val db: Storage, private val tables: Tables) {
         if (onFailure !in setOf("NONE", "ALL_OLD"))
             invalid("Invalid ReturnValuesOnConditionCheckFailure")
         val capacity = Capacity(req)
-        val result =
-            writer.mutate(table, key, initial) { old ->
-                    if (condition?.matches(old.orEmpty()) == false) {
-                        throw ConditionFailed(old.takeIf { onFailure == "ALL_OLD" })
-                    }
-                    when (operation) {
-                            "PutItem" -> input
-                            "UpdateItem" -> {
-                                updated(old, key, actions)
-                            }
-                            "DeleteItem" -> null
-                            else -> error("Unknown write")
-                        }
+        val needsPrevious = update || condition != null
+        val intent = WriteIntent.select(!needsPrevious && returns == "NONE", capacity.requested,
+            if (put) input else null) { old ->
+                if (condition?.matches(old.orEmpty()) == false) {
+                    throw ConditionFailed(old.takeIf { onFailure == "ALL_OLD" })
                 }
-        return obj().apply {
-            addReturned(returns, result.old, result.new, actions)
-            capacity.add(
+                when (operation) {
+                    "PutItem" -> input
+                    "UpdateItem" -> updated(old, key, actions)
+                    "DeleteItem" -> null
+                    else -> error("Unknown write")
+                }
+            }
+        val result = writer.mutate(table, key, intent, initial)
+        return response(result, returns, actions, capacity)
+    }
+
+    private fun response(result: WriteResult, returns: String, actions: List<Action>, capacity: Capacity) =
+        obj().apply {
+            if (returns != "NONE") addReturned(returns, result.old, result.new, actions)
+            if (capacity.requested) capacity.add(
                 this,
-                table.name,
+                result.table.name,
                 writeCapacity(result.table, result.old, result.new),
             )
         }
-    }
 
     private fun updated(old: Item?, key: Item, actions: List<Action>): Item? {
         val base = old ?: key

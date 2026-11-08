@@ -9,6 +9,7 @@ import tikronos.expression.project
 import tikronos.model.Item
 import tikronos.protocol.BatchWrite
 import tikronos.model.WriteResult
+import tikronos.model.WriteIntent
 import tikronos.model.CapacityUnits
 import tikronos.model.Table
 import tikronos.model.Value
@@ -116,7 +117,8 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
             )
         }
         return executeBatch(operations, capacity) { op ->
-            writer.mutate(op.table, op.key) { op.item }
+            val intent = WriteIntent.select(true, capacity.requested, op.item) { op.item }
+            writer.mutate(op.table, op.key, intent)
         }
     }
 
@@ -165,14 +167,17 @@ internal fun executeBatch(
 ): ObjectNode {
     val unprocessed = obj()
     val units = mutableMapOf<String, CapacityUnits>()
+    var completed = 0
     for (op in operations) {
         try {
             val result = commit(op)
-            units.merge(op.table.name, writeCapacity(result.table, result.old, result.new), CapacityUnits::plus)
+            completed++
+            if (capacity.requested)
+                units.merge(op.table.name, writeCapacity(result.table, result.old, result.new), CapacityUnits::plus)
         } catch (_: ContentionLimitExceeded) {
             unprocessed.withArray(op.table.name).add(op.request)
         }
     }
-    if (units.isEmpty()) throw ContentionLimitExceeded()
+    if (completed == 0) throw ContentionLimitExceeded()
     return obj("UnprocessedItems" to unprocessed).also { capacity.batchUsage(it, units) }
 }

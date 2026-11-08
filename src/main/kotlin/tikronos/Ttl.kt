@@ -7,6 +7,8 @@ import tikronos.model.ExpiryCandidate
 import tikronos.model.Item
 import tikronos.model.Table
 import tikronos.model.TtlState
+import tikronos.model.TtlPolicy
+import tikronos.model.policy
 import tikronos.model.attributeName
 import tikronos.storage.Records
 import tikronos.storage.Storage
@@ -53,9 +55,11 @@ internal class Ttl(private val db: Storage) {
             })
     }
 
-    fun track(tx: Transaction, table: Table, old: Item?, new: Item?) {
-        val state = tx.read(TtlRecords.config(table.id))?.let(TtlRecords::state)
-            ?.takeIf { it.enabled } ?: return
+    fun track(
+        tx: Transaction, table: Table, old: Item?, new: Item?,
+        policy: TtlPolicy? = tx.read(TtlRecords.config(table.id))?.let(TtlRecords::state)?.policy,
+    ) {
+        val state = policy ?: return
         old?.let { candidate(state, table, it) }?.let { candidate ->
             tx.write(TtlRecords.address(candidate, table.address(candidate.key)), null)
         }
@@ -65,7 +69,7 @@ internal class Ttl(private val db: Storage) {
     }
 
 
-    internal fun candidate(state: TtlState, table: Table, item: Item): ExpiryCandidate? {
+    internal fun candidate(state: TtlPolicy, table: Table, item: Item): ExpiryCandidate? {
         val expiry = expiration(item, state.attribute, Instant.now().epochSecond) ?: return null
         return ExpiryCandidate(table.name, table.id, state.generation, expiry, table.key(item, false))
     }
