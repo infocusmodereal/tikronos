@@ -1,5 +1,6 @@
 package tikronos
 
+import tikronos.diagnostics.RequestEvents
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -60,33 +61,52 @@ internal class HttpApi(
         call.response.headers.append("x-amzn-RequestId", UUID.randomUUID().toString())
         val headers = RequestHeaders(call.request.headers.names().map { it.lowercase(Locale.ROOT) }
             .distinct().associateWith { call.request.headers.getAll(it).orEmpty() })
+        val event = RequestEvents.begin(headers.first("X-Amz-Target"))
         try {
             bodies.validateLength(call.request.headers[HttpHeaders.ContentLength])
             api.validateHeaders(headers)
-            if (draining || !slots.tryAcquire()) throw throttled()
+            if (draining) {
+                event?.rejection = "draining"
+                throw throttled()
+            }
+            if (!slots.tryAcquire()) {
+                event?.rejection = "admission"
+                throw throttled()
+            }
             try {
                 bodies.consume(call.receiveChannel()) { body ->
-                    respond(call, execute(DynamoRequest(headers, body, hasQuery)))
+                    respond(call, execute(DynamoRequest(headers, body, hasQuery), event))
                 }
             } finally {
                 slots.release()
             }
         } catch (error: ApiError) {
+            event?.status = error.status
+            if (error.message == "Body budget is full") event?.rejection = "body_budget"
             call.response.headers.append(HttpHeaders.Connection, "close")
             respond(call, error(HttpStatusCode.fromValue(error.status), error.code, error.message.orEmpty()))
+        } finally {
+            event?.commit()
         }
     }
 
-    private suspend fun execute(input: DynamoRequest): DynamoResponse {
+    private suspend fun execute(
+        input: DynamoRequest, event: tikronos.diagnostics.RequestEvent?,
+    ): DynamoResponse {
         var acquired = false
         return try {
+            val queued = if (event == null) 0 else System.nanoTime()
             val ready = withTimeoutOrNull(QUEUE_TIMEOUT_MS) {
                 executions.acquire()
                 acquired = true
                 true
             }
-            if (ready != true) throw throttled()
-            withContext(storage) { api.handle(input) }
+            event?.queueNanos = System.nanoTime() - queued
+            if (ready != true) {
+                event?.rejection = "queue"
+                throw throttled()
+            }
+            withContext(storage) { RequestEvents.within(event) { api.handle(input) } }
         } finally {
             if (acquired) executions.release()
         }

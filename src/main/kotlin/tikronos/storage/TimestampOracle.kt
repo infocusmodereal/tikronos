@@ -1,5 +1,6 @@
 package tikronos.storage
 
+import tikronos.diagnostics.RequestEvents
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import org.tikv.common.PDClient
@@ -21,6 +22,11 @@ internal class TimestampOracle(private val allocate: (Int) -> List<TiTimestamp>)
     private var allocating = false
 
     fun next(): TiTimestamp {
+        val started = RequestEvents.start()
+        return try { allocateNext() } finally { RequestEvents.timestamp(started) }
+    }
+
+    private fun allocateNext(): TiTimestamp {
         val ticket = Ticket()
         lock.withLock { pending.addLast(ticket) }
         while (true) {

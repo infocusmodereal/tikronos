@@ -1,5 +1,6 @@
 package tikronos.storage
 
+import tikronos.diagnostics.RequestEvents
 import org.tikv.common.TiSession
 import org.tikv.common.meta.TiTimestamp
 import org.tikv.common.exception.KeyException
@@ -17,6 +18,12 @@ internal class SingleKeyCommit(
     private val timestamp: () -> TiTimestamp = { session.timestamp },
 ) {
     fun commit(key: ByteString, startTs: Long, initialCommitTs: Long, ceiling: Long = Long.MAX_VALUE): Long {
+        val started = RequestEvents.start()
+        return try { complete(key, startTs, initialCommitTs, ceiling) }
+            finally { RequestEvents.commit(started) }
+    }
+
+    private fun complete(key: ByteString, startTs: Long, initialCommitTs: Long, ceiling: Long): Long {
         val budget = ConcreteBackOffer.newCustomBackOff(COMMIT_BUDGET_MS)
         var commitTs = initialCommitTs
         while (true) {

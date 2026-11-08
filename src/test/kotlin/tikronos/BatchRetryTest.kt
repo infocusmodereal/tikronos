@@ -2,6 +2,8 @@ package tikronos
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import tikronos.storage.CommitUnknown
 import tikronos.storage.ContentionLimitExceeded
 import tikronos.protocol.BatchWrite
 import tikronos.model.Table
@@ -30,4 +32,19 @@ class BatchRetryTest {
         }
         assertEquals(listOf("a", "c", "b"), committed)
     }
+
+    @Test
+    fun `unknown commit stops the batch instead of returning replayable unprocessed items`() {
+        val table = Table("Locks", "id", "pk", 0, null)
+        val writes = listOf("a", "b").map { BatchWrite(table, it, obj(), null, emptyMap()) }
+        var attempts = 0
+        assertFailsWith<CommitUnknown> {
+            executeBatch(writes, Capacity(obj())) {
+                attempts++
+                throw CommitUnknown(IllegalStateException("Lost response"))
+            }
+        }
+        assertEquals(1, attempts)
+    }
+
 }

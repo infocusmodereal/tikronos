@@ -59,13 +59,38 @@ The raw-buffer budget does not include all parsed JSON or native allocations. Ad
 
 ## Write completion
 
-Writes acknowledge the durable TiKV primary commit. Secondary locks are completed
-by eight background workers with a queue of 64 transactions; a full queue falls
-back to completion in the request thread. Aborted transactions still clean up
-synchronously before retrying. This uses ordinary two-phase commit, without
-enabling TiKV's async-commit protocol. Readers can resolve unfinished secondaries
-from the primary decision after a crash. Shutdown drains completion work before
-closing the TiKV session; unfinished locks remain recoverable by TiKV clients.
+Single-item transactions without uncovered read dependencies use native TiKV one-phase commit
+(1PC). The request keeps native write-conflict checks, obtains a fresh timestamp before sending,
+and bounds the commit timestamp by the catalog lease. A successful 1PC response is the durable
+commit decision; an explicit fallback continues through ordinary two-phase commit (2PC).
+Multi-key, metadata and index-entry transactions remain on 2PC. Set
+`TIKRONOS_ONE_PHASE_COMMIT=false` to disable 1PC without changing the stored format.
+
+A lost 1PC response is an unknown outcome, including after a lock wait. The API returns HTTP 500
+and does not replay the mutation or return it as an unprocessed batch item. The write may have
+committed, or a fallback lock may remain until TiKV resolves its TTL. Reconcile state before
+retrying a non-idempotent mutation; SDK retries can otherwise apply it twice.
+
+On 2PC, writes acknowledge the durable primary commit. Eight background workers complete
+secondary locks, with a queue of 64 transactions and caller-thread completion when full.
+Readers can resolve secondaries after a crash. Shutdown drains completion work before closing
+the TiKV session. TiKV's async-commit protocol remains disabled.
+
+## Request profiling
+
+Optional Java Flight Recorder event `tikronos.Request` reports the operation, response status,
+rejection reason, storage-worker queue wait, timestamp allocation time, prewrite exchange time,
+primary-commit phase time, and 1PC attempt/commit/fallback counts. Phase durations are summed
+within a request, including retries and catalog renewal; they are not exclusive CPU time.
+Timestamp time includes waiting for the timestamp allocator. Commit time includes region lookup
+and retry waits; prewrite time covers the RPC exchange only. Keys, values and credentials are not recorded.
+Without an active JFR recording, request events are not allocated.
+
+For a bounded diagnostic run, add
+`-XX:StartFlightRecording=filename=/tmp/tikronos.jfr,duration=120s,maxsize=128m,settings=default`
+to `JAVA_OPTS`, retaining the existing heap options. Read events with
+`jfr print --events tikronos.Request /tmp/tikronos.jfr` from a Java 21 JDK.
+Profile separately from comparative benchmarks to avoid attributing recording overhead to storage.
 
 ## Storage and upgrades
 

@@ -1,5 +1,6 @@
 package tikronos
 
+import tikronos.diagnostics.RequestEvents
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.node.ObjectNode
 import tikronos.protocol.DynamoRequest
@@ -41,6 +42,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                             e.old?.let { set<ObjectNode>("Item", json.valueToTree(wireItem(it))) }
                         }
             } catch (_: ContentionLimitExceeded) {
+                RequestEvents.rejection("contention")
                 HttpURLConnection.HTTP_BAD_REQUEST to
                     obj(
                         "__type" to "ProvisionedThroughputExceededException",
@@ -53,6 +55,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                 HttpURLConnection.HTTP_INTERNAL_ERROR to
                     obj("__type" to "InternalServerError", "message" to "Storage request failed")
             }
+        RequestEvents.status(response.first)
         return DynamoResponse(response.first, json.writeValueAsBytes(response.second))
     }
 

@@ -21,6 +21,7 @@ import tikronos.storage.StreamRecords
 import tikronos.storage.Transaction
 import tikronos.storage.loadWritePlan
 import tikronos.storage.CatalogLeases
+import tikronos.storage.Prewrite
 import tikronos.storage.AtomicCommit
 import tikronos.storage.Records
 import tikronos.storage.Storage
@@ -276,6 +277,34 @@ class CatalogCacheIntegrationTest {
                 progress.write(StreamRecords.config(table.id), null)
                 progress.write(ttlKey, null)
             }
+        }
+
+    @Test
+    fun `delayed one phase prewrite cannot cross a drained catalog lease after a reader`() =
+        fixture { first, second, session, table ->
+            val item = mapOf("pk" to Value.text("delayed"))
+            first.read(first.snapshot(), Storage.CATALOG + table.name)
+            val tx = first.transaction()
+            ItemWriter(first).change(tx, table, item, WriteIntent.Replace(item))
+            val validation = tx.validation()
+            assertTrue(validation.guards.isEmpty())
+            var sends = 0
+            val prewrite = Prewrite(session) { stub, request ->
+                assertTrue(request.tryOnePc)
+                sends++
+                Ttl(second).update(obj("TableName" to table.name, "TimeToLiveSpecification" to
+                    obj("AttributeName" to "expires", "Enabled" to true)))
+                // A post-DDL reader must not miss a later old-schema write at an earlier timestamp.
+                session.createSnapshot().get(tikronos.storage.bytes(table.address(item)))
+                stub.kvPrewrite(request).also { assertEquals(0L, it.onePcCommitTs) }
+            }
+            assertFalse(AtomicCommit(session, prewriter = prewrite)
+                .commit(tx.version, tx.writes, validation.guards, ceiling = validation.commitCeiling))
+            assertEquals(1, sends)
+            assertNull(first.read(first.snapshot(), table.address(item)))
+            Ttl(second).update(obj("TableName" to table.name, "TimeToLiveSpecification" to
+                obj("AttributeName" to "expires", "Enabled" to false)))
+            second.atomic { it.write(TtlRecords.config(table.id), null) }
         }
 
     private fun fixture(test: (Storage, Storage, TiSession, Table) -> Unit) {

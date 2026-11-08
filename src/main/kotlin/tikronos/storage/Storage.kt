@@ -7,6 +7,7 @@ import java.util.concurrent.Executor
 internal class Storage(
     private val session: TiSession,
     private val cleanup: Executor = Executor { it.run() },
+    private val onePhase: Boolean = true,
 ) {
     private val timestamps = TimestampOracle(session.pdClient)
     val catalog = CatalogCache(this)
@@ -52,7 +53,7 @@ internal class Storage(
             if (tx.writes.isEmpty()) return result
             if (cached && !catalog.prepare(tx)) return@repeat
             val validation = tx.validation()
-            val committed = AtomicCommit(session, cleanup, timestamps::next)
+            val committed = AtomicCommit(session, cleanup, timestamps::next, onePhase = onePhase)
                 .commit(tx.version, tx.writes, validation.guards, tx.started, validation.commitCeiling)
             if (committed) return result
             // Long or contended writes make progress using the original full-validation path.
@@ -64,8 +65,9 @@ internal class Storage(
     companion object {
         private const val PREFIX = "tikronos/v1/"
         const val CATALOG = "${PREFIX}table/"
+        const val ITEM = "${PREFIX}item/"
 
-        fun itemKey(id: String, value: String) = "${PREFIX}item/$id/$value"
+        fun itemKey(id: String, value: String) = "$ITEM$id/$value"
 
         private const val MAX_ATTEMPTS = 8
     }
