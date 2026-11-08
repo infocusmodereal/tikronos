@@ -80,7 +80,7 @@ the TiKV session. TiKV's async-commit protocol remains disabled.
 
 Optional Java Flight Recorder event `tikronos.Request` reports the operation, response status,
 rejection reason, storage-worker queue wait, timestamp allocation time, prewrite exchange time,
-primary-commit phase time, and 1PC attempt/commit/fallback counts. Phase durations are summed
+primary-commit phase time, and 1PC attempt/commit/fallback counts. Attempt counts include resends, so they need not equal commits plus fallbacks. Phase durations are summed
 within a request, including retries and catalog renewal; they are not exclusive CPU time.
 Timestamp time includes waiting for the timestamp allocator. Commit time includes region lookup
 and retry waits; prewrite time covers the RPC exchange only. Keys, values and credentials are not recorded.

@@ -141,6 +141,7 @@ class OnePhaseCommitIntegrationTest {
     @Test
     fun `region errors retry the same transaction and ineligible writes stay two phase`() = fixture { session, key ->
         val starts = mutableListOf<Long>()
+        val committed = mutableListOf<Long>()
         val prewrite = Prewrite(session) { stub, request ->
             starts += request.startVersion
             if (starts.size == 1) return@Prewrite Kvrpcpb.PrewriteResponse.newBuilder()
@@ -148,6 +149,7 @@ class OnePhaseCommitIntegrationTest {
                     .setMaxTimestampNotSynced(Errorpb.MaxTimestampNotSynced.getDefaultInstance())).build()
             val response = stub.kvPrewrite(request)
             assertTrue(response.onePcCommitTs > 0)
+            committed += response.onePcCommitTs
             if (starts.size == 2) Kvrpcpb.PrewriteResponse.newBuilder()
                 .setRegionError(Errorpb.Error.newBuilder().setMessage("Injected region change after apply"))
                 .build() else response
@@ -156,6 +158,9 @@ class OnePhaseCommitIntegrationTest {
             .commit(session.timestamp.version, mapOf(key to byteArrayOf(1))))
         assertEquals(3, starts.size)
         assertEquals(1, starts.distinct().size)
+        assertEquals(2, committed.size)
+        assertEquals(1, committed.distinct().size)
+        assertEquals(listOf<Byte>(1), session.createSnapshot().get(bytes(key)).toByteArray().toList())
         val ordinary = Prewrite(session) { stub, request ->
             assertFalse(request.tryOnePc)
             stub.kvPrewrite(request)
@@ -183,6 +188,23 @@ class OnePhaseCommitIntegrationTest {
                 TransactionResolution(session).resolve(bytes(key), owner, 0)
                 Thread.sleep(2100)
             }
+        }
+        assertFalse(AtomicCommit(session, prewriter = prewrite)
+            .commit(session.timestamp.version, mapOf(key to byteArrayOf(1))))
+        assertEquals(1, sends)
+        assertTrue(session.createSnapshot().get(bytes(key)).isEmpty)
+    }
+
+    @Test
+    fun `resolver failure after an explicit lock rejection remains safely retryable`() = fixture { session, key ->
+        val owner = session.timestamp.version
+        val lock = Kvrpcpb.LockInfo.newBuilder().setPrimaryLock(bytes("$key/missing-owner"))
+            .setKey(bytes(key)).setLockVersion(owner).setLockTtl(20000).setLockType(Kvrpcpb.Op.Put).build()
+        var sends = 0
+        val prewrite = Prewrite(session) { _, _ ->
+            sends++
+            Kvrpcpb.PrewriteResponse.newBuilder()
+                .addErrors(Kvrpcpb.KeyError.newBuilder().setLocked(lock)).build()
         }
         assertFalse(AtomicCommit(session, prewriter = prewrite)
             .commit(session.timestamp.version, mapOf(key to byteArrayOf(1))))

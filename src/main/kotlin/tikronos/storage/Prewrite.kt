@@ -1,6 +1,5 @@
 package tikronos.storage
 
-import tikronos.diagnostics.RequestEvents
 import java.util.concurrent.TimeUnit
 import org.tikv.common.TiSession
 import org.tikv.common.exception.KeyException
@@ -14,6 +13,7 @@ import org.tikv.shade.com.google.protobuf.ByteString
 import org.tikv.txn.Lock
 import org.tikv.shade.io.grpc.Status
 import org.tikv.shade.io.grpc.StatusRuntimeException
+import tikronos.diagnostics.RequestEvents
 import tikronos.model.OnePhaseBounds
 
 /** TiKV 8.x prewrite, without the SDK's per-client server-version probe or fixed transaction size. */
@@ -69,15 +69,28 @@ internal class Prewrite(
                 Lock(it.locked, codec)
             }
             locked = response.errorsList.first()
+            waitForLocks(region, budget, start, locks, locked, onePhase != null)
+        }
+    }
+
+    @Suppress("LongParameterList", "TooGenericExceptionCaught") // Last send was explicitly rejected.
+    private fun waitForLocks(
+        region: TiRegion, budget: ConcreteBackOffer, start: Long, locks: List<Lock>,
+        locked: Kvrpcpb.KeyError, onePhase: Boolean,
+    ) {
+        try {
             val resolution = session.regionStoreClientBuilder.build(region).use { client ->
                 client.lockResolverClient.resolveLocks(budget, start, locks, true)
             }
             if (resolution.msBeforeTxnExpired > 0) {
                 budget.doBackOffWithMaxSleep(
-                    BackOffFuncType.BoTxnLock, resolution.msBeforeTxnExpired,
-                    KeyException(response.errorsList.first()),
+                    BackOffFuncType.BoTxnLock, resolution.msBeforeTxnExpired, KeyException(locked),
                 )
             }
+        } catch (error: Exception) {
+            // Resolution/backoff failures cannot change the rejected transaction's outcome.
+            if (!onePhase) throw error
+            throw KeyException(locked).apply { addSuppressed(error) }
         }
     }
 

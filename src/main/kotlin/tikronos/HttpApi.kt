@@ -1,6 +1,7 @@
 package tikronos
 
 import tikronos.diagnostics.RequestEvents
+import tikronos.diagnostics.RequestEvent
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -91,7 +92,7 @@ internal class HttpApi(
     }
 
     private suspend fun execute(
-        input: DynamoRequest, event: tikronos.diagnostics.RequestEvent?,
+        input: DynamoRequest, event: RequestEvent?,
     ): DynamoResponse {
         var acquired = false
         return try {

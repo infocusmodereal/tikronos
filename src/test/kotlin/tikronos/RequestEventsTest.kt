@@ -5,6 +5,7 @@ import jdk.jfr.Recording
 import jdk.jfr.consumer.RecordingFile
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.tikv.common.meta.TiTimestamp
@@ -26,6 +27,9 @@ class RequestEventsTest {
                     RequestEvents.onePhaseAttempt()
                     RequestEvents.onePhaseResult(true)
                     RequestEvents.status(200)
+                }
+                assertFailsWith<IllegalStateException> {
+                    RequestEvents.within(event) { error("Injected action failure") }
                 }
                 event.commit()
                 assertEquals(0, RequestEvents.start())

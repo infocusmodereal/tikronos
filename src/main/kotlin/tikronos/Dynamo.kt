@@ -11,6 +11,7 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import tikronos.codec.wireItem
 import tikronos.model.ConditionFailed
+import tikronos.storage.CommitUnknown
 import tikronos.storage.ContentionLimitExceeded
 import tikronos.storage.Storage
 
@@ -50,13 +51,21 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                     )
             } catch (e: ApiError) {
                 e.status to obj("__type" to e.code, "message" to e.message.orEmpty())
+            } catch (e: CommitUnknown) {
+                RequestEvents.rejection("unknown_outcome")
+                storageFailure(e)
             } catch (e: Exception) {
-                logger.log(Level.WARNING, "DynamoDB request failed", e)
-                HttpURLConnection.HTTP_INTERNAL_ERROR to
-                    obj("__type" to "InternalServerError", "message" to "Storage request failed")
+                storageFailure(e)
             }
+
         RequestEvents.status(response.first)
         return DynamoResponse(response.first, json.writeValueAsBytes(response.second))
+    }
+
+    private fun storageFailure(error: Exception): Pair<Int, ObjectNode> {
+        logger.log(Level.WARNING, "DynamoDB request failed", error)
+        return HttpURLConnection.HTTP_INTERNAL_ERROR to
+            obj("__type" to "InternalServerError", "message" to "Storage request failed")
     }
 
     private fun request(input: DynamoRequest): ObjectNode {
