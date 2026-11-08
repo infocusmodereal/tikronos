@@ -55,6 +55,7 @@ fun main(args: Array<String>) {
     val bind = listenAddress(args)
     val signature = signature()
     val limits = HttpLimits.fromEnvironment()
+    val onePhase = System.getenv("TIKRONOS_ONE_PHASE_COMMIT")?.toBooleanStrict() ?: true
     val cpus = Runtime.getRuntime().availableProcessors()
     require(signature != null || bind.address?.isLoopbackAddress == true) {
         "Credentials required on non-loopback listeners"
@@ -63,7 +64,7 @@ fun main(args: Array<String>) {
     configuration.batchGetConcurrency = limits.storageWorkers
     val session = TiSession.create(configuration)
     val cleanup = CommitCleanup()
-    val storage = Storage(session, cleanup)
+    val storage = Storage(session, cleanup, onePhase = onePhase)
     val maintenance = Maintenance(storage)
     val workers = Executors.newFixedThreadPool(limits.storageWorkers)
     val dispatcher = workers.asCoroutineDispatcher()

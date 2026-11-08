@@ -11,14 +11,17 @@ import org.tikv.kvproto.Kvrpcpb
 import org.tikv.shade.com.google.protobuf.ByteString
 import org.tikv.txn.exception.WriteConflictException
 import tikronos.invalid
+import tikronos.model.OnePhaseBounds
 
-/** Primary commit is the only decision point; never replay after attempting it. */
+/** A 1PC prewrite or the 2PC primary commit can decide the transaction; never replay ambiguity. */
 internal class AtomicCommit(
     private val session: TiSession,
     private val cleanup: Executor = Executor { it.run() },
     private val timestamp: () -> TiTimestamp = { session.timestamp },
+    private val prewriter: Prewrite = Prewrite(session),
+    private val onePhase: Boolean = true,
 ) {
-    @Suppress("TooGenericExceptionCaught", "ReturnCount") // Distinct safe aborts before a primary decision.
+    @Suppress("TooGenericExceptionCaught", "ReturnCount", "ThrowsCount") // Distinct safe aborts and unknown outcomes.
     fun commit(
         start: Long,
         values: Map<String, ByteArray?>,
@@ -39,27 +42,18 @@ internal class AtomicCommit(
         val lockTtl =
             TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - started).coerceAtLeast(0)) +
                 LOCK_TTL_MS
-        val mutations =
-            entries.associate { key ->
-                val value = values[key]
-                val mutation =
-                    Kvrpcpb.Mutation.newBuilder()
-                        .setKey(bytes(key))
-                        .setOp(
-                            when {
-                                key in guards -> Kvrpcpb.Op.Lock
-                                value == null -> Kvrpcpb.Op.Del
-                                else -> Kvrpcpb.Op.Put
-                            }
-                        )
-                        .setValue(ByteString.copyFrom(value ?: byteArrayOf()))
-                        .build()
-                mutation.key to mutation
-            }
+        val mutations = mutations(entries, values, guards)
+        val bounds = onePhaseBounds(values, guards, start, ceiling)
+        if (bounds != null && bounds.minimum > bounds.maximum) return false
         try {
-            prewrite(mutations, values, primary, start, lockTtl)
+            if (prewrite(mutations, values, primary, start, lockTtl, bounds) > 0) return true
+        } catch (unknown: CommitUnknown) {
+            // A lost 1PC response may conceal a durable commit. No rollback or fresh replay.
+            throw unknown
         } catch (error: Exception) {
-            // Even a transport-ambiguous prewrite is safe to abort: commit was never attempted.
+            // Region retries can exhaust their budget after a proposal may have applied.
+            if (bounds != null && !explicitKeyError(error)) throw CommitUnknown(error)
+            // Explicit key errors and ordinary 2PC prewrite failures have no commit decision.
             resolve(entries, start, 0)
             if (prewriteConflict(error)) return false
             throw error
@@ -84,13 +78,46 @@ internal class AtomicCommit(
         return true
     }
 
+    private fun mutations(
+        entries: List<String>, values: Map<String, ByteArray?>, guards: Set<String>,
+    ): Map<ByteString, Kvrpcpb.Mutation> =
+            entries.associate { key ->
+                val value = values[key]
+                val mutation =
+                    Kvrpcpb.Mutation.newBuilder()
+                        .setKey(bytes(key))
+                        .setOp(
+                            when {
+                                key in guards -> Kvrpcpb.Op.Lock
+                                value == null -> Kvrpcpb.Op.Del
+                                else -> Kvrpcpb.Op.Put
+                            }
+                        )
+                        .setValue(ByteString.copyFrom(value ?: byteArrayOf()))
+                        .build()
+                mutation.key to mutation
+            }
+
+    private fun onePhaseBounds(
+        values: Map<String, ByteArray?>, guards: Set<String>, start: Long, ceiling: Long,
+    ): OnePhaseBounds? {
+        if (!onePhase || values.size != 1 || guards.isNotEmpty()) return null
+        // Match the upstream linearizable protocol; do not reuse a cached/lease timestamp.
+        val key = values.keys.single()
+        return if (key.startsWith(Storage.ITEM) && !key.startsWith("${Storage.ITEM}index/"))
+            OnePhaseBounds(maxOf(start, timestamp().version) + 1, ceiling) else null
+    }
+
+    @Suppress("LongParameterList") // Native prewrite fields and optional 1PC bounds.
     private fun prewrite(
         mutations: Map<ByteString, Kvrpcpb.Mutation>,
         values: Map<String, ByteArray?>,
         primary: ByteString,
         start: Long,
         lockTtl: Long,
-    ) {
+        onePhase: OnePhaseBounds?,
+    ): Long {
+        var committed = 0L
         val blindFences = values.keys.filter(MetadataFences::isFence).map(::bytes).toSet()
         RegionBatches(session).execute(
             mutations.keys.toList(),
@@ -103,14 +130,17 @@ internal class AtomicCommit(
                 // Preserve lock order even when a metadata change also reads other metadata.
                 // Only constant fence writes skip committed-version checks; live locks remain
                 // checked.
-                Prewrite(session).send(
+                committed = prewriter.send(
                     region, budget, primary, group.map(mutations::getValue),
-                    start, lockTtl, blind, mutations.size,
+                    start, lockTtl, blind, mutations.size, onePhase,
                 )
                 remaining = remaining.drop(group.size)
             }
         }
+        return committed
     }
+
+    private fun explicitKeyError(error: Exception) = error is KeyException || error is WriteConflictException
 
     private fun prewriteConflict(error: Throwable): Boolean =
         generateSequence(error) { it.cause }

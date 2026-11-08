@@ -91,7 +91,7 @@ class AtomicIntegrationTest {
         val keys = listOf(prefix + "a", prefix + "b")
         val start = session.timestamp.version
         assertFailsWith<IllegalStateException> {
-            AtomicCommit(session) { error("PD unavailable") }
+            AtomicCommit(session, timestamp = { error("PD unavailable") })
                 .commit(start, keys.associateWith { byteArrayOf(1) })
         }
         val readVersion = session.timestamp.version
