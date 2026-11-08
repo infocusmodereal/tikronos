@@ -2,8 +2,12 @@ package tikronos.storage
 
 import org.tikv.common.Snapshot
 import org.tikv.common.TiSession
+import java.util.concurrent.Executor
 
-internal class Storage(private val session: TiSession) {
+internal class Storage(
+    private val session: TiSession,
+    private val cleanup: Executor = Executor { it.run() },
+) {
     private val timestamps = TimestampOracle(session.pdClient)
     val catalog = CatalogCache(this)
 
@@ -45,7 +49,7 @@ internal class Storage(private val session: TiSession) {
             }
             if (tx.writes.isEmpty()) return result
             if (cached && !catalog.prepare(tx)) return@repeat
-            val committed = AtomicCommit(session, timestamps::next)
+            val committed = AtomicCommit(session, cleanup, timestamps::next)
                 .commit(tx.version, tx.writes, tx.guards(), tx.started)
             if (committed) return result
         }

@@ -1,6 +1,7 @@
 package tikronos.storage
 
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executor
 import java.util.logging.Level
 import java.util.logging.Logger
 import org.tikv.common.TiSession
@@ -14,6 +15,7 @@ import tikronos.invalid
 /** Primary commit is the only decision point; never replay after attempting it. */
 internal class AtomicCommit(
     private val session: TiSession,
+    private val cleanup: Executor = Executor { it.run() },
     private val timestamp: () -> TiTimestamp = { session.timestamp },
 ) {
     @Suppress("TooGenericExceptionCaught") // Abort every prewrite failure before a commit decision.
@@ -70,7 +72,8 @@ internal class AtomicCommit(
         }
         val committed = SingleKeyCommit(session, timestamp).commit(primary, start, commitTs)
         // Failure here cannot undo the durable primary decision. Readers resolve remaining locks.
-        resolve(entries.drop(1), start, committed)
+        val secondaries = entries.drop(1)
+        if (secondaries.isNotEmpty()) cleanup.execute { resolve(secondaries, start, committed) }
         return true
     }
 

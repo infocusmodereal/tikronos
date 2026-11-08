@@ -48,6 +48,16 @@ SIGTERM rejects new API requests, drains admitted requests for up to ten seconds
 
 The raw-buffer budget does not include all parsed JSON or native allocations. Admission pressure returns a throttling error; oversized bodies return HTTP 413 and body timeouts return HTTP 408. Clients should use bounded retries with backoff where an operation can safely be retried.
 
+## Write completion
+
+Writes acknowledge the durable TiKV primary commit. Secondary locks are completed
+by eight background workers with a queue of 64 transactions; a full queue falls
+back to completion in the request thread. Aborted transactions still clean up
+synchronously before retrying. This uses ordinary two-phase commit, without
+enabling TiKV's async-commit protocol. Readers can resolve unfinished secondaries
+from the primary decision after a crash. Shutdown drains completion work before
+closing the TiKV session; unfinished locks remain recoverable by TiKV clients.
+
 ## Storage and upgrades
 
 Keep PD and TiKV on protected networks. Use storage-level backup and recovery procedures appropriate to TiKV; the API does not provide backups. The development Compose stack has no redundancy.

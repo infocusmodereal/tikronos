@@ -17,6 +17,7 @@ import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
 import tikronos.config.HttpLimits
 import tikronos.storage.Storage
+import tikronos.storage.CommitCleanup
 
 private fun addressArgument(args: Array<String>): String = when {
     args.isEmpty() -> "127.0.0.1:8000"
@@ -61,7 +62,8 @@ fun main(args: Array<String>) {
     val configuration = TiConfiguration.createDefault(System.getenv("TIKRONOS_PD") ?: "127.0.0.1:2379")
     configuration.batchGetConcurrency = limits.storageWorkers
     val session = TiSession.create(configuration)
-    val storage = Storage(session)
+    val cleanup = CommitCleanup()
+    val storage = Storage(session, cleanup)
     val maintenance = Maintenance(storage)
     val workers = Executors.newFixedThreadPool(limits.storageWorkers)
     val dispatcher = workers.asCoroutineDispatcher()
@@ -86,7 +88,7 @@ fun main(args: Array<String>) {
             try {
                 server.stop(GRACE_MS, DRAIN_MS)
             } finally {
-                closeResources(workers, maintenance, dispatcher, session)
+                closeResources(workers, maintenance, dispatcher, cleanup, session)
             }
         }
     }
@@ -120,6 +122,7 @@ private fun closeResources(
     workers: ExecutorService,
     maintenance: Maintenance,
     dispatcher: ExecutorCoroutineDispatcher,
+    cleanup: CommitCleanup,
     session: TiSession,
 ) {
     workers.shutdown()
@@ -130,6 +133,7 @@ private fun closeResources(
             maintenance.close()
         } finally {
             dispatcher.close()
+            cleanup.close()
             session.close()
         }
     }
