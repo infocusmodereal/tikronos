@@ -76,6 +76,10 @@ secondary locks, with a queue of 64 transactions and caller-thread completion wh
 Readers can resolve secondaries after a crash. Shutdown drains completion work before closing
 the TiKV session. TiKV's async-commit protocol remains disabled.
 
+Timestamp batches reuse PD's bidirectional stream through the Java SDK's current leader-aware
+channel. Each batch contains only callers already waiting before allocation. A timeout or stream
+failure retires that stream; retries retain the SDK's bounded policy and leader discovery.
+
 ## Request profiling
 
 Optional Java Flight Recorder event `tikronos.Request` reports the operation, response status,
@@ -83,7 +87,12 @@ rejection reason, storage-worker queue wait, timestamp allocation time, prewrite
 primary-commit phase time, and 1PC attempt/commit/fallback counts. Attempt counts include resends,
 so they need not equal commits plus fallbacks. Phase durations are summed
 within a request, including retries and catalog renewal; they are not exclusive CPU time.
-Timestamp time includes waiting for the timestamp allocator. Commit time includes region lookup
+Timestamp time includes waiting for the timestamp allocator. Subtract `timestampAllocationNanos`
+from `timestampNanos` to estimate coordination and scheduling wait. Allocation time includes the
+shared batch's retries; interrupted callers without a delivered result record no allocation time.
+The `tikronos.Timestamp` event records each batch's size, success, RPC-attempt count and summed
+`rpcNanos`. Its remaining duration includes retries and local work, not just network time.
+Commit time includes region lookup
 and retry waits; prewrite time covers the RPC exchange only. Keys, values and credentials are not recorded.
 Without an active JFR recording, request events are not allocated.
 Rejection reasons distinguish `admission`, `queue`, `body_budget`, `draining`, `contention`
@@ -92,7 +101,7 @@ and `unknown_outcome`. The latter is an ambiguous write result, not a safe rejec
 For a bounded diagnostic run, add
 `-XX:StartFlightRecording=filename=/tmp/tikronos.jfr,duration=120s,maxsize=128m,settings=default`
 to `JAVA_OPTS`, retaining the existing heap options. Read events with
-`jfr print --events tikronos.Request /tmp/tikronos.jfr` from a Java 21 JDK.
+`jfr print --events tikronos.Request,tikronos.Timestamp /tmp/tikronos.jfr` from a Java 21 JDK.
 Profile separately from comparative benchmarks to avoid attributing recording overhead to storage.
 Wait for the recording to finish and verify a copied recording before stopping its container.
 

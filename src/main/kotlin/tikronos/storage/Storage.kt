@@ -8,8 +8,9 @@ internal class Storage(
     private val session: TiSession,
     private val cleanup: Executor = Executor { it.run() },
     private val onePhase: Boolean = true,
-) {
-    private val timestamps = TimestampOracle(session.pdClient)
+) : AutoCloseable {
+    private val pdTimestamps = PdTimestamps(session.pdClient)
+    private val timestamps = TimestampOracle(pdTimestamps::allocate)
     val catalog = CatalogCache(this)
 
     fun snapshot(): Snapshot = session.createSnapshot(timestamps.next())
@@ -61,6 +62,8 @@ internal class Storage(
         }
         throw ContentionLimitExceeded()
     }
+
+    override fun close() = pdTimestamps.close()
 
     companion object {
         private const val PREFIX = "tikronos/v1/"

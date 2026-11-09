@@ -11,7 +11,6 @@ import java.util.concurrent.Executor
 import org.tikv.kvproto.TikvGrpc
 import kotlin.test.assertNull
 import org.junit.jupiter.api.Tag
-import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
 import tikronos.storage.AtomicCommit
 import tikronos.storage.Storage
@@ -138,6 +137,6 @@ class AtomicIntegrationTest {
 
     private fun withStorage(test: (Storage, TiSession) -> Unit) {
         val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        TiSession.create(TiConfiguration.createDefault(endpoint)).use { test(Storage(it), it) }
+        withStorageSession(endpoint) { session, db -> test(db, session) }
     }
 }

@@ -8,8 +8,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import org.junit.jupiter.api.Tag
-import org.tikv.common.TiConfiguration
-import org.tikv.common.TiSession
 import tikronos.model.StreamPosition
 import tikronos.model.Table
 import tikronos.model.Value
@@ -268,8 +266,7 @@ class StreamTtlIntegrationTest {
 
     private fun storage(action: (Storage) -> Unit) {
         val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
-            val db = Storage(session)
+        withStorageSession(endpoint) { _, db ->
             try {
                 action(db)
             } finally {

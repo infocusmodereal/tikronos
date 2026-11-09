@@ -8,7 +8,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Tag
-import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
 import tikronos.model.Table
 import tikronos.model.CatalogLease
@@ -307,19 +306,20 @@ class CatalogCacheIntegrationTest {
             second.atomic { it.write(TtlRecords.config(table.id), null) }
         }
 
+    @Suppress("NestedBlockDepth") // Two independent API instances share a test session.
     private fun fixture(test: (Storage, Storage, TiSession, Table) -> Unit) {
         val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
-            val first = Storage(session)
-            val second = Storage(session)
-            val id = UUID.randomUUID().toString()
-            val table = Table("000cache-$id", id, "pk", 0, null)
-            val key = Storage.CATALOG + table.name
-            try {
-                second.atomic { it.write(key, Records.encodeTable(table)) }
-                test(first, second, session, table)
-            } finally {
-                second.atomic { it.write(key, null) }
+        withStorageSession(endpoint) { session, first ->
+            Storage(session).use { second ->
+                val id = UUID.randomUUID().toString()
+                val table = Table("000cache-$id", id, "pk", 0, null)
+                val key = Storage.CATALOG + table.name
+                try {
+                    second.atomic { it.write(key, Records.encodeTable(table)) }
+                    test(first, second, session, table)
+                } finally {
+                    second.atomic { it.write(key, null) }
+                }
             }
         }
     }
