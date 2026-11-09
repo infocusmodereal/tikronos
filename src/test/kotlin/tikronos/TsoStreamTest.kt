@@ -27,7 +27,7 @@ import org.tikv.shade.io.grpc.stub.ServerCallStreamObserver
 import org.tikv.shade.io.grpc.stub.StreamObserver
 import tikronos.storage.TsoStream
 
-@Timeout(10)
+@Timeout(10, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class TsoStreamTest {
     @Test
     fun `successive allocations reuse a stream without closing the shared channel`() {
