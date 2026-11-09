@@ -1,5 +1,7 @@
 package tikronos
 
+import tikronos.protocol.Signature
+
 import tikronos.diagnostics.RequestEvents
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.node.ObjectNode
@@ -24,7 +26,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
     private val reads = Reads(db, tables)
     private val batches = Batches(db, tables)
 
-    fun validateHeaders(headers: RequestHeaders) { signature?.validateHeaders(headers) }
+    fun validateHeaders(headers: RequestHeaders) = signature?.validateHeaders(headers)
 
     @Suppress(
         "TooGenericExceptionCaught"
@@ -78,7 +80,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
                 HttpURLConnection.HTTP_ENTITY_TOO_LARGE,
             )
         }
-        signature?.verify(input.headers, body)
+        signature?.verify(input.headers, body, input.signature)
         val target = input.headers.first("X-Amz-Target").orEmpty()
         val prefix = when {
             target.startsWith(PREFIX) -> PREFIX

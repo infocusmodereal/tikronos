@@ -1,6 +1,6 @@
-package tikronos
+package tikronos.protocol
 
-import tikronos.protocol.RequestHeaders
+import tikronos.ApiError
 import java.security.MessageDigest
 import java.time.Duration
 import java.time.Instant
@@ -12,13 +12,19 @@ import javax.crypto.spec.SecretKeySpec
 
 /** SigV4 for the single DynamoDB POST / endpoint (no query, permanent credentials). */
 internal class Signature(private val access: String, private val secret: String, private val region: String) {
-    fun verify(headers: RequestHeaders, body: ByteArray, now: Instant = Instant.now()) {
-        val auth = validateHeaders(headers, now)
-        val day = auth.groups["day"]!!.value
-        val names = auth.groups["names"]!!.value
-        val signature = auth.groups["signature"]!!.value
-        val date = headers.first("X-Amz-Date") ?: denied()
-        val signed = names.split(';')
+    @Volatile private var signingKey: DayKey? = null
+
+    fun verify(
+        headers: RequestHeaders, body: ByteArray, context: SignatureContext?, now: Instant = Instant.now(),
+    ) {
+        val auth = context as? Prepared ?: denied()
+        if (auth.owner !== this || auth.headers !== headers) denied()
+        // Admission validation cannot authorize a request that expired while reading or queued.
+        validateTime(auth.time, now)
+        val day = auth.day
+        val names = auth.names
+        val date = auth.date
+        val signed = auth.signed
         val hash = sha256(body)
         if (headers.first("X-Amz-Content-Sha256")?.let { it != hash } == true) denied()
         val canonicalHeaders = signed.joinToString("\n") { name ->
@@ -28,28 +34,53 @@ internal class Signature(private val access: String, private val secret: String,
         val canonical = "POST\n/\n\n$canonicalHeaders\n\n$names\n$hash"
         val scope = "$day/$region/dynamodb/aws4_request"
         val toSign = "AWS4-HMAC-SHA256\n$date\n$scope\n" + sha256(canonical.encodeToByteArray())
-        val key = scope.split('/').fold(("AWS4" + secret).encodeToByteArray(), ::hmac)
-        if (!MessageDigest.isEqual(hmac(key, toSign), HexFormat.of().parseHex(signature))) denied()
+        if (!MessageDigest.isEqual(hmac(key(day), toSign), auth.signature)) denied()
     }
 
-    fun validateHeaders(headers: RequestHeaders, now: Instant = Instant.now()): MatchResult {
+    fun validateHeaders(headers: RequestHeaders, now: Instant = Instant.now()): SignatureContext {
         val auth = authorization.matchEntire(headers.first("Authorization").orEmpty()) ?: denied()
         val date = headers.first("X-Amz-Date") ?: denied()
         val day = auth.groups["day"]!!.value
         if (auth.groups["id"]!!.value != access || auth.groups["region"]!!.value != region) denied()
         if (!date.startsWith(day) || headers.contains("X-Amz-Security-Token")) denied()
-        validateTime(date, now)
+        val time = parseTime(date)
+        validateTime(time, now)
         val signed = auth.groups["names"]!!.value.split(';')
         if (signed != signed.distinct().sorted() || !signed.containsAll(required)) denied()
-        return auth
+        return Prepared(headers, day, date, time,
+            signed, HexFormat.of().parseHex(auth.groups["signature"]!!.value))
     }
 
-    private fun validateTime(date: String, now: Instant) {
-        val time = try {
-            Instant.from(dateFormat.parse(date))
-        } catch (_: DateTimeParseException) {
-            denied()
-        }
+    private fun key(day: String): ByteArray {
+        signingKey?.takeIf { it.day == day }?.let { return it.bytes }
+        val bytes = listOf(day, region, "dynamodb", "aws4_request")
+            .fold(("AWS4" + secret).encodeToByteArray(), ::hmac)
+        // One immutable entry per verifier; concurrent misses may derive the same key harmlessly.
+        signingKey = DayKey(day, bytes)
+        return bytes
+    }
+
+    private class DayKey(val day: String, val bytes: ByteArray)
+
+    private inner class Prepared(
+        val headers: RequestHeaders,
+        val day: String,
+        val date: String,
+        val time: Instant,
+        val signed: List<String>,
+        val signature: ByteArray,
+    ) : SignatureContext {
+        val names = signed.joinToString(";")
+        val owner: Signature get() = this@Signature
+    }
+
+    private fun parseTime(date: String): Instant = try {
+        Instant.from(dateFormat.parse(date))
+    } catch (_: DateTimeParseException) {
+        denied()
+    }
+
+    private fun validateTime(time: Instant, now: Instant) {
         if (Duration.between(time, now).abs() > MAX_SKEW) denied()
     }
 

@@ -1,3 +1,8 @@
 package tikronos.protocol
 
-internal data class DynamoRequest(val headers: RequestHeaders, val body: ByteArray, val hasQuery: Boolean)
+internal data class DynamoRequest(
+    val headers: RequestHeaders,
+    val body: ByteArray,
+    val hasQuery: Boolean,
+    val signature: SignatureContext? = null,
+)
