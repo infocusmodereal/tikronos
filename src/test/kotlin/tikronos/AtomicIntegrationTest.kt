@@ -136,7 +136,6 @@ class AtomicIntegrationTest {
     }
 
     private fun withStorage(test: (Storage, TiSession) -> Unit) {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        withStorageSession(endpoint) { session, db -> test(db, session) }
+        withStorageSession { session, db -> test(db, session) }
     }
 }

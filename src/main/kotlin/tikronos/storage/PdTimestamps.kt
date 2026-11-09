@@ -37,7 +37,7 @@ internal class PdTimestamps(private val pd: PDClient) : AutoCloseable {
     @Suppress("TooGenericExceptionCaught") // Retire every failed exchange before the SDK decides whether to retry.
     private fun exchange(request: Pdpb.TsoRequest, event: TimestampEvent?): Pdpb.TsoResponse {
         val started = if (event == null) 0 else System.nanoTime()
-        event?.let { it.attempts++ }
+        if (event != null) event.attempts++
         return try {
             current().exchange(request, pd.timeout)
         } catch (error: Exception) {

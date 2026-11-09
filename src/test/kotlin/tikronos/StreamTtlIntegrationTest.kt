@@ -265,8 +265,7 @@ class StreamTtlIntegrationTest {
     }
 
     private fun storage(action: (Storage) -> Unit) {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        withStorageSession(endpoint) { _, db ->
+        withStorageSession { _, db ->
             try {
                 action(db)
             } finally {

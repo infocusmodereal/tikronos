@@ -22,8 +22,7 @@ import tikronos.storage.TransactionResolution
 class CatalogRenewalIntegrationTest {
     @Test
     fun `a stalled renewal does not block another reader of the table`() {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        withStorageSession(endpoint) { session, db ->
+        withStorageSession { session, db ->
             val id = UUID.randomUUID().toString()
             val table = Table("renewal-$id", id, "pk", 0, null)
             val key = Storage.CATALOG + table.name

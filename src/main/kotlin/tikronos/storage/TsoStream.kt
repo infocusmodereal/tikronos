@@ -60,7 +60,7 @@ internal class TsoStream private constructor(val channel: Channel) : AutoCloseab
                             .asRuntimeException(), cancel = true)
                     } else {
                         result.complete(message)
-                        if (failure == null) call.request(1)
+                        call.request(1)
                     }
                 }
             }

@@ -91,9 +91,8 @@ Timestamp time includes waiting for the timestamp allocator. Subtract `timestamp
 from `timestampNanos` to estimate coordination and scheduling wait. Allocation time includes the
 shared batch's retries; interrupted callers without a delivered result record no allocation time.
 The `tikronos.Timestamp` event records each batch's size, success, RPC-attempt count and summed
-`rpcNanos`. Its remaining duration includes retries and local work, not just network time.
-Commit time includes region lookup
-and retry waits; prewrite time covers the RPC exchange only. Keys, values and credentials are not recorded.
+`rpcNanos`, including retried exchanges. Its remaining duration includes retry backoff and local work.
+Commit time includes region lookup and retry waits; prewrite time covers the RPC exchange only. Keys, values and credentials are not recorded.
 Without an active JFR recording, request events are not allocated.
 Rejection reasons distinguish `admission`, `queue`, `body_budget`, `draining`, `contention`
 and `unknown_outcome`. The latter is an ambiguous write result, not a safe rejection to replay.

@@ -19,8 +19,7 @@ import tikronos.storage.key
 class MaximumKeyIntegrationTest {
     @Test
     fun `maximum DynamoDB keys fit secondary entries and TTL backfill candidates`() {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        withStorageSession(endpoint) { _, db ->
+        withStorageSession { _, db ->
             val id = "000-maxkeys-" + UUID.randomUUID()
             val indexes = listOf(
                 Index("globalKeys", UUID.randomUUID().toString(), "gpk", "S", "gsk", "S",

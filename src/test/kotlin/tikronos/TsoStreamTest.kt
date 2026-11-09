@@ -22,6 +22,7 @@ import org.tikv.shade.io.grpc.Status
 import org.tikv.shade.io.grpc.StatusRuntimeException
 import org.tikv.shade.io.grpc.inprocess.InProcessChannelBuilder
 import org.tikv.shade.io.grpc.inprocess.InProcessServerBuilder
+import org.tikv.shade.io.grpc.stub.ServerCallStreamObserver
 import org.tikv.shade.io.grpc.stub.StreamObserver
 import tikronos.storage.TsoStream
 
@@ -42,6 +43,28 @@ class TsoStreamTest {
                 assertEquals(4L, stream.exchange(request(4), 1000).timestamp.logical)
             }
             assertEquals(2, opened.get())
+        }
+    }
+
+    @Test
+    fun `unsolicited response retires an idle stream`() {
+        val cancelled = CountDownLatch(1)
+        withServer({ responses ->
+            (responses as ServerCallStreamObserver<Pdpb.TsoResponse>).setOnCancelHandler {
+                cancelled.countDown()
+            }
+            observer {
+                responses.onNext(response(10))
+                responses.onNext(response(20))
+            }
+        }) { channel ->
+            TsoStream.open(channel).use { stream ->
+                assertEquals(10L, stream.exchange(request(), 1000).timestamp.logical)
+                assertTrue(cancelled.await(1, TimeUnit.SECONDS))
+                assertTrue(stream.closed)
+                val error = assertFailsWith<StatusRuntimeException> { stream.exchange(request(), 1000) }
+                assertEquals(Status.Code.INTERNAL, error.status.code)
+            }
         }
     }
 

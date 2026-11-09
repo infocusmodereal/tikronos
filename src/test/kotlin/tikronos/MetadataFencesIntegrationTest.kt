@@ -85,8 +85,7 @@ class MetadataFencesIntegrationTest {
         }
 
     private fun withFixture(test: (Storage, TiSession, String, String) -> Unit) {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        withStorageSession(endpoint) { session, db ->
+        withStorageSession { session, db ->
             val id = UUID.randomUUID().toString()
             val config = TtlRecords.CONFIGS + id
             val prefix = "tikronos-test/$id/"

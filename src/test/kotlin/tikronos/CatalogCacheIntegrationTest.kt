@@ -308,8 +308,7 @@ class CatalogCacheIntegrationTest {
 
     @Suppress("NestedBlockDepth") // Two independent API instances share a test session.
     private fun fixture(test: (Storage, Storage, TiSession, Table) -> Unit) {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        withStorageSession(endpoint) { session, first ->
+        withStorageSession { session, first ->
             Storage(session).use { second ->
                 val id = UUID.randomUUID().toString()
                 val table = Table("000cache-$id", id, "pk", 0, null)

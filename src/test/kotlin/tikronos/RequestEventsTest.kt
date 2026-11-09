@@ -23,7 +23,10 @@ class RequestEventsTest {
                 recording.start()
                 val event = assertNotNull(RequestEvents.begin("DynamoDB_20120810.PutItem"))
                 RequestEvents.within(event) {
-                    TimestampOracle { List(it) { TiTimestamp(1, 1) } }.next()
+                    TimestampOracle {
+                        Thread.sleep(1) // Make the measured allocation exceed timer resolution.
+                        List(it) { TiTimestamp(1, 1) }
+                    }.next()
                     RequestEvents.onePhaseAttempt()
                     RequestEvents.onePhaseResult(true)
                     RequestEvents.status(200)
