@@ -18,6 +18,7 @@ internal class RequestEvent : Event() {
     @JvmField var rejection = ""
     @JvmField @Timespan(Timespan.NANOSECONDS) var queueNanos = 0L
     @JvmField @Timespan(Timespan.NANOSECONDS) var timestampNanos = 0L
+    @JvmField @Timespan(Timespan.NANOSECONDS) var timestampAllocationNanos = 0L
     @JvmField @Timespan(Timespan.NANOSECONDS) var prewriteNanos = 0L
     @JvmField @Timespan(Timespan.NANOSECONDS) var commitNanos = 0L
     @JvmField var timestamps = 0
