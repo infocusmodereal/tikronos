@@ -2,6 +2,7 @@ package tikronos.storage
 
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import org.tikv.kvproto.PDGrpc
@@ -15,7 +16,8 @@ import org.tikv.shade.io.grpc.Status
 /** One outstanding allocation per stream. A failed stream is never reused for another batch. */
 internal class TsoStream private constructor(val channel: Channel) : AutoCloseable {
     private val lock = Any()
-    private val call = channel.newCall(PDGrpc.getTsoMethod(), CallOptions.DEFAULT)
+    // Listener work is limited to delivering a result and inbound flow control; never do IO here.
+    private val call = channel.newCall(PDGrpc.getTsoMethod(), CallOptions.DEFAULT.withExecutor(Executor { it.run() }))
     private var pending: CompletableFuture<Pdpb.TsoResponse>? = null
     private var failure: RuntimeException? = null
 

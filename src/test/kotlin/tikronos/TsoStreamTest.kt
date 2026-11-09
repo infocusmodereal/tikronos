@@ -12,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Timeout
 import org.tikv.common.exception.GrpcException
 import org.tikv.common.policy.RetryMaxMs
 import org.tikv.common.util.ConcreteBackOffer
@@ -26,6 +27,7 @@ import org.tikv.shade.io.grpc.stub.ServerCallStreamObserver
 import org.tikv.shade.io.grpc.stub.StreamObserver
 import tikronos.storage.TsoStream
 
+@Timeout(10)
 class TsoStreamTest {
     @Test
     fun `successive allocations reuse a stream without closing the shared channel`() {
