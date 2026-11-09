@@ -1,15 +1,15 @@
 package tikronos.storage
 
 import tikronos.diagnostics.RequestEvents
+import java.util.concurrent.locks.Condition
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import org.tikv.common.meta.TiTimestamp
 
 /** Batch only callers already waiting before PD allocation; never cache future timestamps. */
 internal class TimestampOracle(private val allocate: (Int) -> List<TiTimestamp>) {
-    private class Ticket(var result: Result<TiTimestamp>? = null, var allocationNanos: Long = 0)
+    private class Ticket(val changed: Condition, var result: Result<TiTimestamp>? = null, var allocationNanos: Long = 0)
     private val lock = ReentrantLock()
-    private val changed = lock.newCondition()
     private val pending = ArrayDeque<Ticket>()
     private var allocating = false
 
@@ -24,15 +24,16 @@ internal class TimestampOracle(private val allocate: (Int) -> List<TiTimestamp>)
     }
 
     private fun allocateNext(): Ticket {
-        val ticket = Ticket()
+        val ticket = Ticket(lock.newCondition())
         lock.withLock { pending.addLast(ticket) }
         while (true) {
             val batch = lock.withLock {
-                while (ticket.result == null && allocating) {
+                while (ticket.result == null && (allocating || pending.firstOrNull() !== ticket)) {
                     try {
-                        changed.await()
+                        ticket.changed.await()
                     } catch (interrupted: InterruptedException) {
                         pending.remove(ticket)
+                        if (!allocating) pending.firstOrNull()?.changed?.signal()
                         throw interrupted
                     }
                 }
@@ -50,9 +51,11 @@ internal class TimestampOracle(private val allocate: (Int) -> List<TiTimestamp>)
                 batch.forEachIndexed { index, waiter ->
                     waiter.allocationNanos = elapsed
                     waiter.result = result.map { it[index] }
+                    waiter.changed.signal()
                 }
                 allocating = false
-                changed.signalAll()
+                // Wake only the next allocator; unrelated waiters have no work yet.
+                pending.firstOrNull()?.changed?.signal()
             }
         }
     }
