@@ -13,6 +13,7 @@ internal data class Index(
     val attributes: List<String> = emptyList(),
     val throughput: Throughput? = null,
     val status: String = "ACTIVE",
+    // Legacy resume seed; new checkpoints live outside the catalog.
     val cursor: String? = null,
 )
 

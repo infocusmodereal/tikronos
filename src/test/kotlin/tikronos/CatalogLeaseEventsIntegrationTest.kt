@@ -14,7 +14,6 @@ import tikronos.diagnostics.CatalogLeaseEvent
 import tikronos.diagnostics.RequestEvent
 import tikronos.diagnostics.RequestEvents
 import tikronos.model.CatalogLease
-import tikronos.model.Index
 import tikronos.model.Table
 import tikronos.storage.CatalogLeases
 import tikronos.storage.Records
@@ -75,8 +74,7 @@ class CatalogLeaseEventsIntegrationTest {
     fun `ineligible catalog loads are not reported as lease extensions`() {
         withStorageSession { _, db ->
             val id = UUID.randomUUID().toString()
-            val table = Table("creating-$id", id, "pk", 0, null,
-                indexes = listOf(Index("byGroup", id, "group", "S", status = "CREATING")))
+            val table = Table("blocked-$id", id, "pk", 0, null)
             val key = Storage.CATALOG + table.name
             val absent = Storage.CATALOG + "absent-$id"
             val path = Files.createTempFile("catalog-ineligible-", ".jfr")
@@ -88,17 +86,16 @@ class CatalogLeaseEventsIntegrationTest {
                     val event = RequestEvent()
                     RequestEvents.within(event) {
                         assertNull(db.read(db.snapshot(), absent))
-                        assertNotNull(db.read(db.snapshot(), key))
                         db.uncachedAtomic { it.write(CatalogLeases.key(key), CatalogLeases.encode(
                             CatalogLease(blockedUntil = it.version + 5 * CatalogLeases.DURATION))) }
                         assertNotNull(db.read(db.snapshot(), key))
                     }
-                    assertEquals(3, event.catalogFallbackGets)
+                    assertEquals(2, event.catalogFallbackGets)
                     recording.stop()
                     recording.dump(path)
                 }
                 val events = RecordingFile.readAllEvents(path).filter { it.eventType.name == "tikronos.CatalogLease" }
-                assertEquals(listOf("missing", "creating", "blocked"), events.map { it.getString("outcome") })
+                assertEquals(listOf("missing", "blocked"), events.map { it.getString("outcome") })
                 assertTrue(events.all { it.getInt("attempts") == 1 && it.getInt("leaseWriteAttempts") == 0 })
             } finally {
                 db.atomic { it.write(key, null) }

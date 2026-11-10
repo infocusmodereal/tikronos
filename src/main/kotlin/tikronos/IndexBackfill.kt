@@ -1,8 +1,10 @@
 package tikronos
 
-import tikronos.model.ScanOptions
+import tikronos.model.BackfillProgress
 import tikronos.model.Index
+import tikronos.model.ScanOptions
 import tikronos.model.Table
+import tikronos.storage.BackfillRecords
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.Transaction
@@ -24,49 +26,60 @@ internal class IndexBackfill(private val db: Storage) {
         }
     }
 
-    private fun backfill(table: Table, index: Index) {
+    internal fun backfill(table: Table, index: Index) {
+        val progressKey = BackfillRecords.index(table, index)
+        val expected = BackfillRecords.decode(db.read(db.snapshot(), progressKey), index.cursor ?: "")
+        advance(table, index, expected)
+    }
+
+    internal fun advance(table: Table, index: Index, expected: BackfillProgress) {
+        val progressKey = BackfillRecords.index(table, index)
+        val cursor = checkNotNull(expected.cursor) { "Creating index has a completed checkpoint" }
         val prefix = table.prefix()
-        val first = index.cursor?.let { after(bytes(it)) } ?: bytes(prefix)
+        val first = if (cursor.isEmpty()) bytes(prefix) else after(bytes(cursor))
         val rows = db.ranges.scan(first, prefixEnd(prefix), true,
-            options = ScanOptions(limit = ROWS_PER_TICK, keyOnly = true)).toList()
-        var cursor = index.cursor
-        for (row in rows) {
-            val expected = cursor
-            val advanced = db.atomic { tx ->
-                val current = current(tx, table, index, expected) ?: return@atomic false
-                val address = row.key.toStringUtf8()
-                val item = tx.read(address)?.let { Records.itemAt(current, address, it) }
-                if (item != null) index.existingEntry(current, item)?.let {
-                    tx.write(it, Records.encodeItem(item))
-                }
-                checkpoint(tx, current, index.id, row.key.toStringUtf8(), false)
-                true
+            options = ScanOptions(limit = ROWS_PER_TICK, keyOnly = true)).map { it.key.toStringUtf8() }.toList()
+        db.atomic { tx ->
+            val current = tx.table(table.name)?.takeIf { it.id == table.id } ?: return@atomic
+            val live = current.indexes.find { it.id == index.id && it.status == "CREATING" } ?: return@atomic
+            if (BackfillRecords.decode(tx.read(progressKey), live.cursor ?: "") != expected) return@atomic
+            val last = writeBatch(tx, current, live, rows)
+            if (rows.size < ROWS_PER_TICK && last == rows.lastOrNull()) {
+                val changed = current.copy(indexes = current.indexes.map {
+                    if (it.id == index.id) it.copy(cursor = null, status = "ACTIVE") else it
+                })
+                tx.write(Storage.CATALOG + current.name, Records.encodeTable(changed))
+                tx.write(progressKey, null)
+            } else {
+                tx.write(progressKey, BackfillRecords.encode(BackfillProgress(checkNotNull(last))))
             }
-            if (!advanced) return
-            cursor = row.key.toStringUtf8()
-        }
-        if (rows.size < ROWS_PER_TICK) db.atomic { tx ->
-            val current = current(tx, table, index, cursor) ?: return@atomic
-            checkpoint(tx, current, index.id, null, true)
         }
     }
 
-    private fun current(tx: Transaction, table: Table, index: Index, cursor: String?): Table? {
-        val current = tx.read(Storage.CATALOG + table.name)?.let(Records::table)
-        return current?.takeIf { it.id == table.id && it.indexes.any { candidate ->
-            candidate.id == index.id && candidate.status == "CREATING" && candidate.cursor == cursor
-        } }
-    }
-
-    private fun checkpoint(tx: Transaction, table: Table, id: String, cursor: String?, done: Boolean) {
-        val changed = table.copy(indexes = table.indexes.map {
-            if (it.id == id) it.copy(cursor = cursor, status = if (done) "ACTIVE" else "CREATING") else it
-        })
-        tx.write(Storage.CATALOG + table.name, Records.encodeTable(changed))
+    /** Bound derived writes by bytes; small prefetch windows limit unused read dependencies. */
+    private fun writeBatch(tx: Transaction, table: Table, index: Index, rows: List<String>): String? {
+        var used = 0
+        var last: String? = null
+        for ((offset, address) in rows.withIndex()) {
+            if (offset % PREFETCH_ROWS == 0)
+                tx.prefetch(rows.subList(offset, minOf(offset + PREFETCH_ROWS, rows.size)))
+            val item = tx.read(address)?.let { Records.itemAt(table, address, it) }
+            val entry = item?.let { index.existingEntry(table, it) }
+            if (entry != null) {
+                val encoded = Records.encodeItem(checkNotNull(item))
+                if (used > 0 && used + encoded.size > WRITE_BYTES) return last
+                tx.write(entry, encoded)
+                used += encoded.size
+            }
+            last = address
+        }
+        return last
     }
 
     companion object {
         private const val TABLES_PER_TICK = 20
         private const val ROWS_PER_TICK = 32
+        private const val PREFETCH_ROWS = 8
+        private const val WRITE_BYTES = 1024 * 1024
     }
 }

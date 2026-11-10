@@ -83,11 +83,6 @@ internal class CatalogCache(private val db: Storage) {
                 return@uncachedAtomic null
             }
             val table = decode(key, value)
-            // Backfill checkpoints change on every row; caching them delays progress without benefit.
-            if (table.indexes.any { it.status == "CREATING" }) {
-                event?.outcome = "creating"
-                return@uncachedAtomic null
-            }
             val until = if (lease.until - tx.version > RENEW_AHEAD) lease.until
                 else tx.version + CatalogLeases.DURATION
             event?.outcome = if (until == lease.until) "reused" else "extended"

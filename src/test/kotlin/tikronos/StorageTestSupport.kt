@@ -1,12 +1,15 @@
 package tikronos
 
+import java.util.UUID
 import java.util.concurrent.TimeUnit
-import org.tikv.kvproto.Kvrpcpb
-import org.tikv.kvproto.TikvGrpc
-import tikronos.storage.bytes
+import kotlin.test.assertEquals
 import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
+import org.tikv.kvproto.Kvrpcpb
+import org.tikv.kvproto.TikvGrpc
 import tikronos.storage.Storage
+import tikronos.storage.Transaction
+import tikronos.storage.bytes
 
 internal fun Storage.mutate(key: String, change: (ByteArray?) -> ByteArray?): ByteArray? = atomic { tx ->
     val old = tx.read(key)
@@ -31,4 +34,20 @@ internal fun TiSession.readWithoutResolvingLocks(key: String, version: Long): Kv
         .setContext(region.getReplicaContext(region.leader, emptySet()))
         .setKey(pdClient.codec.encodeKey(bytes(key))).setVersion(version).build()
     return TikvGrpc.newBlockingStub(channel).withDeadlineAfter(3, TimeUnit.SECONDS).kvGet(request)
+}
+
+/** Native read validation detects even an identical metadata rewrite during the operation. */
+internal fun Storage.assertMetadataUnchanged(keys: List<String>, operation: () -> Unit) {
+    val probeKey = "test/metadata-probe/${UUID.randomUUID()}"
+    val probe = Transaction(snapshot(), this, cached = false)
+    keys.forEach(probe::read)
+    probe.write(probeKey, byteArrayOf(1))
+    try {
+        operation()
+        var attempts = 0
+        atomic(probe) { attempts++ }
+        assertEquals(1, attempts, "Operation must not invalidate metadata readers")
+    } finally {
+        atomic { it.write(probeKey, null) }
+    }
 }
