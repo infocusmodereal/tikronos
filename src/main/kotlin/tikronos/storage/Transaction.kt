@@ -34,9 +34,12 @@ internal class Transaction(
     fun read(key: String): ByteArray? {
         if (writes.containsKey(key)) return writes[key]
         if (!reads.containsKey(key)) {
-            val lease = if (cached && allowLeases && key.startsWith(Storage.CATALOG))
+            val catalog = cached && key.startsWith(Storage.CATALOG)
+            val lease = if (catalog && allowLeases)
                 storage.catalog.leased(snapshot, key) else null
-            if (lease != null) remember(key, lease) else reads[key] = storage.directRead(snapshot, key)
+            if (lease != null) remember(key, lease) else reads[key] =
+                if (catalog) storage.catalogFallback(snapshot, key)
+                else storage.directRead(snapshot, key)
         }
         return reads[key]
     }

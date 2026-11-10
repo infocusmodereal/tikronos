@@ -21,6 +21,12 @@ internal class RequestEvent : Event() {
     @JvmField @Timespan(Timespan.NANOSECONDS) var timestampAllocationNanos = 0L
     @JvmField @Timespan(Timespan.NANOSECONDS) var prewriteNanos = 0L
     @JvmField @Timespan(Timespan.NANOSECONDS) var commitNanos = 0L
+    @JvmField @Timespan(Timespan.NANOSECONDS) var catalogAcquireNanos = 0L
+    @JvmField @Timespan(Timespan.NANOSECONDS) var catalogDrainNanos = 0L
+    @JvmField var catalogAcquisitions = 0
+    @JvmField var catalogDrains = 0
+    @JvmField var catalogFallbackGets = 0
+    @JvmField var catalogLoaderBusy = 0
     @JvmField var timestamps = 0
     @JvmField var prewrites = 0
     @JvmField var commits = 0

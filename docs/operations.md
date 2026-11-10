@@ -98,10 +98,25 @@ Without an active JFR recording, request events are not allocated.
 Rejection reasons distinguish `admission`, `queue`, `body_budget`, `draining`, `contention`
 and `unknown_outcome`. The latter is an ambiguous write result, not a safe rejection to replay.
 
+The `tikronos.CatalogLease` event measures complete acquisition and drain calls, including
+transaction retries. Acquisition triggers distinguish `cold`, `expired` and `renewal`; outcomes
+distinguish durable lease `extended` or `reused` from `missing`, `creating`, `blocked` and `error`.
+A completed drain reports `drained`. `attempts` counts transaction attempts and
+`leaseWriteAttempts` counts write intents across retries, not successful commits or native RPCs.
+Drain `polls` includes the terminal PD timestamp check; `waitNanos` includes polling and sleep.
+These events also cover startup and maintenance outside an HTTP request, without table identities.
+
+Request events include catalog acquisition/drain totals and durations, loader-busy counts and
+`catalogFallbackGets`. The latter counts catalog point Gets outside the internal lease transaction;
+it excludes batched prefetch. A busy loader can still return a valid existing lease without a Get.
+The triggering read falls back after cold or expired acquisition because its older snapshot precedes
+the acquired interval. Catalog durations overlap timestamp/prewrite/commit phases; do not add them
+as exclusive costs. Hot cache hits emit no lease event. Use TiKV server metrics for native RPC counts.
+
 For a bounded diagnostic run, add
 `-XX:StartFlightRecording=filename=/tmp/tikronos.jfr,duration=120s,maxsize=128m,settings=default`
 to `JAVA_OPTS`, retaining the existing heap options. Read events with
-`jfr print --events tikronos.Request,tikronos.Timestamp /tmp/tikronos.jfr` from a Java 21 JDK.
+`jfr print --events tikronos.Request,tikronos.Timestamp,tikronos.CatalogLease /tmp/tikronos.jfr` from a Java 21 JDK.
 Profile separately from comparative benchmarks to avoid attributing recording overhead to storage.
 Wait for the recording to finish and verify a copied recording before stopping its container.
 
