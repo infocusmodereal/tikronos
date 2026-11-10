@@ -119,7 +119,7 @@ Evidence: [Items.kt](https://github.com/infocusmodereal/tikronos/blob/2dbe0556d9
 - [x] **Native TiKV use:** Yes: native Del and transactional conflict detection; conditional checks and removal of dependent index/TTL/stream records are coordinated by the translator.
 - [x] **Code structure:** Shares the mutation boundary and return-value logic with PutItem; no separate deletion transaction implementation is needed.
 - [x] **Clear inefficiencies:** Unconditional deletion on a plain table can already omit the prior read. Enabled side effects or requested old values require it; physical namespace cleanup is a separate issue.
-- [x] **Edge cases and coverage:** Covered: ALL_OLD and TTL renewal protection at the shared writer. Add DeleteItem-specific missing-item and failed-condition tests; do not infer them from conditional Put coverage. Ambiguity remains subject to F11.
+- [x] **Edge cases and coverage:** Covered: ALL_OLD (CatalogCacheIntegrationTest) and, separately, TTL-worker expiry that rechecks renewed items before using the shared writer. Add DeleteItem-specific missing-item and failed-condition tests; do not infer them from conditional Put coverage. Ambiguity remains subject to F11.
 - [x] **Parallelism or async:** Index/stream/TTL changes must stay atomic with the item delete. Existing secondary cleanup can run after the durable primary; do not turn required side effects into fire-and-forget tasks.
 
 ### UpdateItem
