@@ -1,6 +1,7 @@
 package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
+import org.tikv.common.Snapshot
 import tikronos.codec.parseItem
 import tikronos.codec.wireItem
 import tikronos.expression.Path
@@ -20,6 +21,7 @@ import tikronos.storage.Storage
 import tikronos.storage.address
 import tikronos.storage.key
 import tikronos.storage.entry
+import tikronos.storage.readBatch
 
 internal class Batches(private val db: Storage, private val tables: Tables) {
     private val writer = ItemWriter(db)
@@ -42,10 +44,10 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
             val partitions = mutableMapOf<Value, Int>()
             val result = json.createArrayNode()
             val pending = json.createArrayNode()
-            fun readKey(key: Item) {
+            fun readKey(key: Item, stored: ByteArray?) {
                 val partition = key.getValue(group.table.partitionKey)
                 val used = partitions.getOrDefault(partition, 0)
-                val item = db.read(snapshot, group.table.address(key))?.let(Records::item)
+                val item = stored?.let(Records::item)
                 val bytes = itemSize(item.orEmpty())
                 val projected = item?.let { wireItem(project(it, group.paths)) }
                 val cost = projected?.let { json.writeValueAsBytes(it).size + 1 } ?: 0
@@ -58,7 +60,7 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
                     units.merge(group.table.name, readUnits(bytes, group.strong), Double::plus)
                 }
             }
-            group.keys.forEach(::readKey)
+            group.forEachItem(snapshot, ::readKey)
             responses.set<ObjectNode>(group.table.name, result)
             if (!pending.isEmpty)
                 unprocessed.set<ObjectNode>(
@@ -88,6 +90,14 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
         val keys = entries.map { table.key(parseItem(it)) }
         if (keys.distinct().size != keys.size) invalid("BatchGetItem keys contain duplicates")
         return ReadGroup(table, req, keys, paths, req.flag("ConsistentRead"))
+    }
+
+    private fun ReadGroup.forEachItem(snapshot: Snapshot, consume: (Item, ByteArray?) -> Unit) {
+        keys.chunked(READ_CHUNK).forEach { chunk ->
+            val addresses = chunk.map(table::address)
+            val found = snapshot.readBatch(addresses)
+            chunk.forEachIndexed { index, key -> consume(key, found[addresses[index]]) }
+        }
     }
 
     fun write(req: ObjectNode): ObjectNode {
@@ -136,7 +146,7 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
             table,
             table.address(key),
             request,
-            if (put) item.also { encodeChecked(it) } else null,
+            if (put) item.also(::validateItem) else null,
             key,
         )
     }
@@ -154,6 +164,7 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
 
     companion object {
         private const val RESPONSE_BUDGET = 16 * PAGE_BYTES
+        private const val READ_CHUNK = 16
     }
 }
 

@@ -27,8 +27,7 @@ internal class Transaction(
             .forEach { key -> storage.catalog.cached(key, version)?.let { remember(key, it) } }
         val missing = keys.distinct().filter { it !in reads && it !in writes }
         if (missing.isEmpty()) return
-        val found = snapshot.batchGet(READ_BUDGET_MS, missing.map(String::encodeToByteArray))
-            .associate { it.key.decodeToString() to it.value }
+        val found = snapshot.readBatch(missing, READ_BUDGET_MS)
         missing.forEach { reads[it] = found[it] }
     }
 

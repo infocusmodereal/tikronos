@@ -40,9 +40,9 @@ internal class ItemWriter(private val db: Storage) {
             is WriteIntent.Replace -> intent.item
             is WriteIntent.Transform -> intent.apply((previous as PreviousItem.Read).item)
         }
-        val encoded = next?.let(::encodeChecked)
+        val encoded = next?.also(::validateItem)?.let(Records::encodeItem)
         if (previous is PreviousItem.Read) {
-            maintainIndexes(tx, current, previous.item, next)
+            maintainIndexes(tx, current, previous.item, next, encoded)
             this.ttl.track(tx, current, previous.item, next, plan.ttl)
             streams.record(tx, plan, previous.item, next, ttl)
         }
