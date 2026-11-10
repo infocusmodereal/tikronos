@@ -6,9 +6,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executor
-import org.tikv.kvproto.TikvGrpc
 import kotlin.test.assertNull
 import org.junit.jupiter.api.Tag
 import org.tikv.common.TiSession
@@ -95,15 +93,7 @@ class AtomicIntegrationTest {
         }
         val readVersion = session.timestamp.version
         for (key in keys) {
-            val region = session.regionManager.getRegionByKey(bytes(key))
-            val store = session.regionManager.getStoreById(region.leader.storeId)
-            val channel = session.channelFactory.getChannel(store.address, session.pdClient.hostMapping)
-            val request = Kvrpcpb.GetRequest.newBuilder()
-                .setContext(region.getReplicaContext(region.leader, emptySet()))
-                .setKey(session.pdClient.codec.encodeKey(bytes(key))).setVersion(readVersion).build()
-            // Bypass SDK lock resolution: an abandoned lock must fail, not wait until its TTL expires.
-            val response = TikvGrpc.newBlockingStub(channel)
-                .withDeadlineAfter(3, TimeUnit.SECONDS).kvGet(request)
+            val response = session.readWithoutResolvingLocks(key, readVersion)
             assertFalse(response.hasRegionError(), response.regionError.toString())
             assertFalse(response.hasError(), response.error.toString())
             assertTrue(response.value.isEmpty)
