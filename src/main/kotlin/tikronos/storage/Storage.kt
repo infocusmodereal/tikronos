@@ -1,5 +1,6 @@
 package tikronos.storage
 
+import tikronos.diagnostics.RequestEvents
 import org.tikv.common.Snapshot
 import org.tikv.common.TiSession
 import java.util.concurrent.Executor
@@ -25,6 +26,11 @@ internal class Storage(
 
     internal fun directRead(snapshot: Snapshot, key: String): ByteArray? =
         snapshot.get(key.encodeToByteArray()).takeIf { it.isNotEmpty() }
+
+    internal fun catalogFallback(snapshot: Snapshot, key: String): ByteArray? {
+        RequestEvents.catalogFallback()
+        return directRead(snapshot, key)
+    }
 
     val ranges = RangeReader(session)
 

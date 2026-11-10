@@ -17,6 +17,8 @@ import tikronos.storage.CatalogLeases
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.TransactionResolution
+import tikronos.diagnostics.RequestEvent
+import tikronos.diagnostics.RequestEvents
 
 @Tag("tikv")
 class CatalogRenewalIntegrationTest {
@@ -53,8 +55,12 @@ class CatalogRenewalIntegrationTest {
                 val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WAIT_MS.toLong())
                 while (!acquiring(worker.get()) && System.nanoTime() < deadline) Thread.sleep(5)
                 assertTrue(acquiring(worker.get()), "The first reader must be inside lease acquisition")
-                val reader = pool.submit<Table> { Tables(db).find(table.name) }
+                val event = RequestEvent()
+                val reader = pool.submit<Table> { RequestEvents.within(event) { Tables(db).find(table.name) } }
                 assertEquals(table, reader.get(WAIT_MS.toLong(), TimeUnit.MILLISECONDS))
+                assertEquals(1, event.catalogLoaderBusy)
+                assertEquals(1, event.catalogFallbackGets)
+                assertEquals(0, event.catalogAcquisitions)
             } finally {
                 release()
             }

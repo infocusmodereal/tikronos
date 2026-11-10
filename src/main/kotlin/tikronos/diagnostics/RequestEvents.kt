@@ -3,6 +3,7 @@ package tikronos.diagnostics
 import jdk.jfr.EventType
 
 /** The context is installed only inside the blocking dispatcher, never across a coroutine suspension. */
+@Suppress("TooManyFunctions") // Keep all request phase accounting behind the same thread-local lifecycle.
 internal object RequestEvents {
     private val type = EventType.getEventType(RequestEvent::class.java)
     private val current = ThreadLocal<RequestEvent>()
@@ -47,6 +48,24 @@ internal object RequestEvents {
     fun commit(start: Long) {
         if (start != 0L) current.get()?.let { it.commitNanos += System.nanoTime() - start; it.commits++ }
     }
+
+    fun catalog(action: String, start: Long = 0) {
+        current.get()?.let {
+            when (action) {
+                "acquire" -> if (start != 0L) {
+                    it.catalogAcquireNanos += System.nanoTime() - start
+                    it.catalogAcquisitions++
+                }
+                "drain" -> if (start != 0L) {
+                    it.catalogDrainNanos += System.nanoTime() - start
+                    it.catalogDrains++
+                }
+            }
+        }
+    }
+
+    fun catalogFallback() { current.get()?.let { it.catalogFallbackGets++ } }
+    fun catalogLoaderBusy() { current.get()?.let { it.catalogLoaderBusy++ } }
 
     fun onePhaseAttempt() { current.get()?.let { it.onePhaseAttempts++ } }
     fun onePhaseResult(committed: Boolean) {

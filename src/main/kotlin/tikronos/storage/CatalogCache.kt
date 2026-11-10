@@ -1,5 +1,7 @@
 package tikronos.storage
 
+import tikronos.diagnostics.CatalogLeaseEvent
+import tikronos.diagnostics.RequestEvents
 import java.util.LinkedHashMap
 import java.util.concurrent.locks.ReentrantLock
 import org.tikv.common.Snapshot
@@ -27,7 +29,7 @@ internal class CatalogCache(private val db: Storage) {
     } ?: Records.table(value)
 
     fun read(snapshot: Snapshot, key: String): ByteArray? =
-        leased(snapshot, key)?.bytes ?: db.directRead(snapshot, key)
+        leased(snapshot, key)?.bytes ?: db.catalogFallback(snapshot, key)
 
     fun leased(snapshot: Snapshot, key: String): LeasedValue? {
         val current = cached(key, snapshot.version)
@@ -38,7 +40,10 @@ internal class CatalogCache(private val db: Storage) {
     private fun load(snapshot: Snapshot, key: String): LeasedValue? {
         val loader = loaders[(key.hashCode() and Int.MAX_VALUE) % LOCKS]
         // A renewal must not queue unrelated requests behind its TiKV RPCs.
-        if (!loader.tryLock()) return null
+        if (!loader.tryLock()) {
+            RequestEvents.catalogLoaderBusy()
+            return null
+        }
         return try {
             val previous = synchronized(entries) { entries[key] }
             when {
@@ -46,7 +51,12 @@ internal class CatalogCache(private val db: Storage) {
                 previous != null && previous.until - snapshot.version > RENEW_AHEAD ->
                     LeasedValue(previous.bytes, previous.until, previous.plan)
                 else -> {
-                    acquire(key)?.let { remember(key, it) }
+                    val trigger = when {
+                        previous == null -> "cold"
+                        snapshot.version > previous.until -> "expired"
+                        else -> "renewal"
+                    }
+                    acquire(key, trigger)?.let { remember(key, it) }
                     cached(key, snapshot.version)
                 }
             }
@@ -58,18 +68,35 @@ internal class CatalogCache(private val db: Storage) {
         }
     }
 
-    private fun acquire(key: String): Entry? = db.uncachedAtomic { tx ->
-        val leaseKey = CatalogLeases.key(key)
-        val lease = CatalogLeases.decode(tx.read(leaseKey))
-        if (lease.blockedUntil > tx.version) return@uncachedAtomic null
-        val value = tx.read(key) ?: return@uncachedAtomic null
-        val table = decode(key, value)
-        // Backfill checkpoints change on every row; caching them delays progress without benefit.
-        if (table.indexes.any { it.status == "CREATING" }) return@uncachedAtomic null
-        val until = if (lease.until - tx.version > RENEW_AHEAD) lease.until
-            else tx.version + CatalogLeases.DURATION
-        if (until != lease.until) tx.write(leaseKey, CatalogLeases.encode(CatalogLease(until)))
-        Entry(value, tx.loadWritePlan(table), tx.version, until)
+    private fun acquire(key: String, trigger: String): Entry? = CatalogLeaseEvent.measure("acquire", trigger) { event ->
+        db.uncachedAtomic { tx ->
+            event?.let { it.attempts++ }
+            val leaseKey = CatalogLeases.key(key)
+            val lease = CatalogLeases.decode(tx.read(leaseKey))
+            if (lease.blockedUntil > tx.version) {
+                event?.outcome = "blocked"
+                return@uncachedAtomic null
+            }
+            val value = tx.read(key)
+            if (value == null) {
+                event?.outcome = "missing"
+                return@uncachedAtomic null
+            }
+            val table = decode(key, value)
+            // Backfill checkpoints change on every row; caching them delays progress without benefit.
+            if (table.indexes.any { it.status == "CREATING" }) {
+                event?.outcome = "creating"
+                return@uncachedAtomic null
+            }
+            val until = if (lease.until - tx.version > RENEW_AHEAD) lease.until
+                else tx.version + CatalogLeases.DURATION
+            event?.outcome = if (until == lease.until) "reused" else "extended"
+            if (until != lease.until) {
+                event?.let { it.leaseWriteAttempts++ }
+                tx.write(leaseKey, CatalogLeases.encode(CatalogLease(until)))
+            }
+            Entry(value, tx.loadWritePlan(table), tx.version, until)
+        }
     }
 
     /** All catalog writers, including maintenance, must pass this gate before their commit. */
@@ -88,17 +115,29 @@ internal class CatalogCache(private val db: Storage) {
         return true
     }
 
-    private fun drain(key: String) {
+    private fun drain(key: String) = CatalogLeaseEvent.measure("drain") { event ->
         val until = db.uncachedAtomic { tx ->
+            event?.let { it.attempts++ }
             val leaseKey = CatalogLeases.key(key)
             val lease = CatalogLeases.decode(tx.read(leaseKey))
             if (lease.until >= tx.version && lease.blockedUntil <= tx.version) {
                 val blocked = lease.copy(blockedUntil = tx.version + CatalogLeases.DRAIN_TIMEOUT)
+                event?.let { it.leaseWriteAttempts++ }
                 tx.write(leaseKey, CatalogLeases.encode(blocked))
             }
             lease.until
         }
-        while (db.snapshot().version <= until) Thread.sleep(DRAIN_POLL_MS)
+        val waiting = if (event == null) 0 else System.nanoTime()
+        try {
+            while (true) {
+                event?.let { it.polls++ }
+                if (db.snapshot().version > until) break
+                Thread.sleep(DRAIN_POLL_MS)
+            }
+            event?.outcome = "drained"
+        } finally {
+            if (event != null) event.waitNanos = System.nanoTime() - waiting
+        }
     }
 
     private fun remember(key: String, entry: Entry) = synchronized(entries) {
