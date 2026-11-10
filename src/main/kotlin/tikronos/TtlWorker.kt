@@ -1,6 +1,7 @@
 package tikronos
 
 import java.time.Instant
+import tikronos.model.ScanOptions
 import tikronos.model.TtlState
 import tikronos.storage.Records
 import tikronos.storage.Storage
@@ -18,8 +19,8 @@ internal class TtlWorker(private val db: Storage, private val ttl: Ttl) {
     fun tick(writer: ItemWriter) {
         val configs = TtlRecords.CONFIGS
         val first = if (configAfter.isEmpty()) bytes(configs) else after(bytes(configAfter))
-        val page = db.ranges.scan(first, prefixEnd(configs), true)
-            .take(BATCH_SIZE).toList()
+        val page = db.ranges.scan(first, prefixEnd(configs), true,
+            options = ScanOptions(limit = BATCH_SIZE)).toList()
         configAfter = if (page.size < BATCH_SIZE) "" else page.last().key.toStringUtf8()
         for (row in page) maintenanceAttempt("TTL backfill") {
             val state = TtlRecords.state(row.value.toByteArray())
@@ -27,8 +28,8 @@ internal class TtlWorker(private val db: Storage, private val ttl: Ttl) {
         }
         val now = Instant.now().epochSecond
         val low = if (candidateAfter.isEmpty()) bytes(TtlRecords.CANDIDATES) else after(bytes(candidateAfter))
-        val candidates = db.ranges.scan(low, bytes(TtlRecords.dueEnd(now)), true)
-            .take(BATCH_SIZE).toList()
+        val candidates = db.ranges.scan(low, bytes(TtlRecords.dueEnd(now)), true,
+            options = ScanOptions(limit = BATCH_SIZE)).toList()
         candidateAfter = if (candidates.size < BATCH_SIZE) "" else candidates.last().key.toStringUtf8()
         for (row in candidates) maintenanceAttempt("TTL candidate") {
             expire(row.key.toStringUtf8(), TtlRecords.candidate(row.value.toByteArray()), now, writer)
@@ -56,7 +57,8 @@ internal class TtlWorker(private val db: Storage, private val ttl: Ttl) {
             ?.takeIf { it.id == state.tableId } ?: return
         val prefix = table.prefix()
         val first = state.cursor?.takeIf { it.isNotEmpty() }?.let { after(bytes(it)) } ?: bytes(prefix)
-        val rows = db.ranges.scan(first, prefixEnd(prefix), true).take(BATCH_SIZE).toList()
+        val rows = db.ranges.scan(first, prefixEnd(prefix), true,
+            options = ScanOptions(limit = BATCH_SIZE, keyOnly = true)).toList()
         db.atomic { tx ->
             val live = tx.read(Storage.CATALOG + table.name)?.let(Records::table)
             val current = tx.read(TtlRecords.config(table.id))?.let(TtlRecords::state)

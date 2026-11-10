@@ -3,6 +3,7 @@ package tikronos
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.time.Instant
 import org.tikv.common.Snapshot
+import tikronos.model.ScanOptions
 import tikronos.model.StreamPosition
 import tikronos.model.StreamState
 import tikronos.storage.Storage
@@ -83,11 +84,11 @@ internal class StreamReads(private val db: Storage) {
         val prefix = StreamRecords.events(state)
         val first = after(bytes(prefix + StreamRecords.sequence(position.after)))
         val end = after(bytes(prefix + StreamRecords.sequence(state.head)))
-        val rows = db.ranges.scan(first, end, true, snap).take(limit + 1).iterator()
+        val rows = db.ranges.scan(first, end, true, snap, ScanOptions(limit = limit)).iterator()
         val records = mutableListOf<ObjectNode>()
         var cursor = position.after
         var size = 0
-        while (rows.hasNext() && records.size < limit) {
+        while (records.size < limit && size < PAGE_BYTES && rows.hasNext()) {
             val row = rows.next()
             val data = json.readTree(row.value.toByteArray()) as ObjectNode
             val recordBytes = data.path("dynamodb").path("SizeBytes").intValue()
@@ -108,7 +109,8 @@ internal class StreamReads(private val db: Storage) {
         val cutoff = timestampStartOfSecond(Instant.now().epochSecond - STREAM_RETENTION_SECONDS + 1)
         val prefix = StreamRecords.events(state)
         val expired = db.ranges.scan(bytes(prefix), bytes(prefix + StreamRecords.sequence(cutoff)),
-            false, snapshot).firstOrNull()?.key?.toStringUtf8()?.substringAfterLast('/')?.toLong() ?: 0
+            false, snapshot, ScanOptions(limit = 1, keyOnly = true))
+            .firstOrNull()?.key?.toStringUtf8()?.substringAfterLast('/')?.toLong() ?: 0
         return state.copy(trimmed = maxOf(state.trimmed, expired))
     }
 

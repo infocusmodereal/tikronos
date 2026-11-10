@@ -35,6 +35,16 @@ skip the previous-item read when indexes, TTL, Streams, return values and capaci
 not require it; TiKV still checks write conflicts.
 The same storage gate covers API schema changes, tags, index checkpoints, and deletion/recreation.
 
+## Range reads
+
+Scans use one MVCC snapshot per request and keep TiKV's region routing and lock resolution.
+Table listing, retention probes and backfill discovery use native key-only reads; maintenance
+still rechecks current values transactionally before writing. Caller row limits bound fetching.
+Value scans start with up to eight rows, then size batches toward 1 MiB using the largest observed
+row, still capped at eight; key-only batches are capped at 128. This is a payload target, not a hard byte limit:
+TiKV limits rows, and a later row can be larger. Large-value pages may trade more RPCs for less
+prefetch. Query/Scan byte limits remain applied before filtering and projection.
+
 ## Health and shutdown
 
 `GET /healthz` and `HEAD /healthz` report process liveness only. Use a signed read such as `ListTables` to verify storage access. A successful liveness response does not mean TiKV is ready.

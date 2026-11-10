@@ -8,6 +8,7 @@ import tikronos.expression.Path
 import tikronos.expression.RequestExpressions
 import tikronos.expression.paths
 import tikronos.expression.project
+import tikronos.model.ScanOptions
 import tikronos.model.Item
 import tikronos.model.Table
 import tikronos.model.itemSize
@@ -53,7 +54,7 @@ internal class Reads(private val db: Storage, private val tables: Tables) {
         val endKey = if (!forward && cursor != null) cursor else end
         val page =
             collect(
-                db.ranges.scan(startKey, endKey, forward, snapshot).map {
+                db.ranges.scan(startKey, endKey, forward, snapshot, ScanOptions(limit = limit)).map {
                     Records.item(it.value.toByteArray())
                 },
                 limit, target, fetch,

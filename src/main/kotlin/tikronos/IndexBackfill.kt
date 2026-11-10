@@ -1,5 +1,6 @@
 package tikronos
 
+import tikronos.model.ScanOptions
 import tikronos.model.Index
 import tikronos.model.Table
 import tikronos.storage.Records
@@ -26,8 +27,8 @@ internal class IndexBackfill(private val db: Storage) {
     private fun backfill(table: Table, index: Index) {
         val prefix = table.prefix()
         val first = index.cursor?.let { after(bytes(it)) } ?: bytes(prefix)
-        val rows = db.ranges.scan(first, prefixEnd(prefix), true)
-            .take(ROWS_PER_TICK).toList()
+        val rows = db.ranges.scan(first, prefixEnd(prefix), true,
+            options = ScanOptions(limit = ROWS_PER_TICK, keyOnly = true)).toList()
         var cursor = index.cursor
         for (row in rows) {
             val expected = cursor
