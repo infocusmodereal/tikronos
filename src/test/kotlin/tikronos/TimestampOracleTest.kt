@@ -1,5 +1,6 @@
 package tikronos
 
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -64,6 +65,45 @@ class TimestampOracleTest {
             release.countDown()
             assertEquals(1L, first.get(5, TimeUnit.SECONDS).physical)
             assertEquals(2L, late.get(5, TimeUnit.SECONDS).physical)
+        }
+    }
+
+    @Test
+    fun `interrupted queue head does not strand later callers`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val requests = AtomicLong()
+        val oracle = TimestampOracle { count ->
+            val physical = requests.incrementAndGet()
+            if (physical == 1L) {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+            }
+            List(count) { TiTimestamp(physical, it.toLong()) }
+        }
+        val interrupted = CompletableFuture<Unit>()
+        val head = Thread {
+            try {
+                assertFailsWith<InterruptedException> { oracle.next() }
+                interrupted.complete(Unit)
+            } catch (failure: Throwable) { interrupted.completeExceptionally(failure) }
+        }
+        Executors.newFixedThreadPool(2).use { pool ->
+            val first = pool.submit<TiTimestamp> { oracle.next() }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            head.start()
+            try {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (head.state != Thread.State.WAITING && System.nanoTime() < deadline) Thread.yield()
+                assertEquals(Thread.State.WAITING, head.state)
+                val later = pool.submit<TiTimestamp> { oracle.next() }
+                assertFailsWith<TimeoutException> { later.get(50, TimeUnit.MILLISECONDS) }
+                head.interrupt()
+                interrupted.get(5, TimeUnit.SECONDS)
+                release.countDown()
+                assertEquals(1L, first.get(5, TimeUnit.SECONDS).physical)
+                assertEquals(2L, later.get(5, TimeUnit.SECONDS).physical)
+            } finally { head.interrupt(); release.countDown(); head.join(1000) }
         }
     }
 

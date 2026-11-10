@@ -7,8 +7,6 @@ import kotlin.test.assertTrue
 import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import org.junit.jupiter.api.Tag
-import org.tikv.common.TiConfiguration
-import org.tikv.common.TiSession
 import tikronos.model.Index
 import tikronos.model.Table
 import tikronos.model.Value
@@ -26,9 +24,7 @@ import tikronos.storage.schema
 class IndexBackfillIntegrationTest {
     @Test
     fun `backfill resumes its checkpoint after writes before and after the cursor`() {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
-            val db = Storage(session)
+        withStorageSession { session, db ->
             val id = UUID.randomUUID().toString()
             val index = Index("byGroup", UUID.randomUUID().toString(), "group", "S", status = "CREATING")
             val table = Table("000resume-$id", id, "pk", 0, null, hashed = true, indexes = listOf(index))
@@ -76,9 +72,7 @@ class IndexBackfillIntegrationTest {
 
     @Test
     fun `decodable corrupt primary keys do not become active indexes`() {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
-            val db = Storage(session)
+        withStorageSession { session, db ->
             val id = UUID.randomUUID().toString()
             val index = Index("byGroup", UUID.randomUUID().toString(), "group", "S", status = "CREATING")
             val table = Table("000corrupt-$id", id, "pk", 0, null, hashed = true, indexes = listOf(index))
@@ -110,9 +104,7 @@ class IndexBackfillIntegrationTest {
 
     @Test
     fun `one undecodable catalog entry does not starve a later backfill`() {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
-            val db = Storage(session)
+        withStorageSession { session, db ->
             val suffix = UUID.randomUUID().toString()
             val broken = Storage.CATALOG + "000broken-$suffix"
             val index = Index("byGroup", UUID.randomUUID().toString(), "group", "S", status = "CREATING")

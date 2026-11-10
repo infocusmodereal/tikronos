@@ -32,8 +32,12 @@ internal object RequestEvents {
 
     fun start(): Long = if (current.get() == null) 0 else System.nanoTime()
 
-    fun timestamp(start: Long) {
-        if (start != 0L) current.get()?.let { it.timestampNanos += System.nanoTime() - start; it.timestamps++ }
+    fun timestamp(start: Long, allocationNanos: Long) {
+        if (start != 0L) current.get()?.let {
+            it.timestampNanos += System.nanoTime() - start
+            it.timestampAllocationNanos += allocationNanos
+            it.timestamps++
+        }
     }
 
     fun prewrite(start: Long) {

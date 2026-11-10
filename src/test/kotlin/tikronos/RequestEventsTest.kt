@@ -23,7 +23,10 @@ class RequestEventsTest {
                 recording.start()
                 val event = assertNotNull(RequestEvents.begin("DynamoDB_20120810.PutItem"))
                 RequestEvents.within(event) {
-                    TimestampOracle { List(it) { TiTimestamp(1, 1) } }.next()
+                    TimestampOracle {
+                        Thread.sleep(1) // Make the measured allocation exceed timer resolution.
+                        List(it) { TiTimestamp(1, 1) }
+                    }.next()
                     RequestEvents.onePhaseAttempt()
                     RequestEvents.onePhaseResult(true)
                     RequestEvents.status(200)
@@ -44,6 +47,9 @@ class RequestEventsTest {
             assertEquals(listOf("PutItem", "Unknown"), events.map { it.getString("operation") })
             assertEquals(1, events[0].getInt("timestamps"))
             assertTrue(events[0].getDuration("timestampNanos").toNanos() > 0)
+            val allocation = events[0].getDuration("timestampAllocationNanos").toNanos()
+            assertTrue(allocation > 0)
+            assertTrue(allocation <= events[0].getDuration("timestampNanos").toNanos())
             assertEquals(1, events[0].getInt("onePhaseCommits"))
             assertEquals(0, events[1].getInt("timestamps"))
             assertEquals("admission", events[1].getString("rejection"))

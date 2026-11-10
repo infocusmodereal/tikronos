@@ -91,7 +91,7 @@ fun main(args: Array<String>) {
             try {
                 server.stop(GRACE_MS, DRAIN_MS)
             } finally {
-                closeResources(workers, maintenance, dispatcher, cleanup, session)
+                closeResources(workers, maintenance, dispatcher, cleanup, storage, session)
             }
         }
     }
@@ -121,11 +121,13 @@ private fun cleanupStartup(shutdown: Thread, error: Exception) {
     }
 }
 
+@Suppress("LongParameterList") // Explicit shutdown ordering for independently owned resources.
 private fun closeResources(
     workers: ExecutorService,
     maintenance: Maintenance,
     dispatcher: ExecutorCoroutineDispatcher,
     cleanup: CommitCleanup,
+    storage: Storage,
     session: TiSession,
 ) {
     workers.shutdown()
@@ -137,7 +139,7 @@ private fun closeResources(
         } finally {
             dispatcher.close()
             cleanup.close()
-            session.close()
+            try { storage.close() } finally { session.close() }
         }
     }
 }

@@ -6,8 +6,6 @@ import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import org.junit.jupiter.api.Tag
-import org.tikv.common.TiConfiguration
-import org.tikv.common.TiSession
 import tikronos.model.Index
 import tikronos.model.Table
 import tikronos.model.Value
@@ -21,9 +19,7 @@ import tikronos.storage.key
 class MaximumKeyIntegrationTest {
     @Test
     fun `maximum DynamoDB keys fit secondary entries and TTL backfill candidates`() {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
-            val db = Storage(session)
+        withStorageSession { _, db ->
             val id = "000-maxkeys-" + UUID.randomUUID()
             val indexes = listOf(
                 Index("globalKeys", UUID.randomUUID().toString(), "gpk", "S", "gsk", "S",

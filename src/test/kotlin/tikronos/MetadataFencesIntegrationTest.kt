@@ -6,7 +6,6 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Tag
-import org.tikv.common.TiConfiguration
 import org.tikv.common.TiSession
 import org.tikv.common.util.ConcreteBackOffer
 import org.tikv.kvproto.Kvrpcpb
@@ -86,9 +85,7 @@ class MetadataFencesIntegrationTest {
         }
 
     private fun withFixture(test: (Storage, TiSession, String, String) -> Unit) {
-        val endpoint = System.getenv("TIKRONOS_TEST_PD") ?: "127.0.0.1:2379"
-        TiSession.create(TiConfiguration.createDefault(endpoint)).use { session ->
-            val db = Storage(session)
+        withStorageSession { session, db ->
             val id = UUID.randomUUID().toString()
             val config = TtlRecords.CONFIGS + id
             val prefix = "tikronos-test/$id/"
