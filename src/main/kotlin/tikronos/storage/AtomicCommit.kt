@@ -14,12 +14,14 @@ import tikronos.invalid
 import tikronos.model.OnePhaseBounds
 
 /** A 1PC prewrite or the 2PC primary commit can decide the transaction; never replay ambiguity. */
+@Suppress("LongParameterList") // Protocol components and bounds remain independently injectable.
 internal class AtomicCommit(
     private val session: TiSession,
     private val cleanup: Executor = Executor { it.run() },
     private val timestamp: () -> TiTimestamp = { session.timestamp },
     private val prewriter: Prewrite = Prewrite(session),
     private val onePhase: Boolean = true,
+    private val primaryCommit: SingleKeyCommit = SingleKeyCommit(session, timestamp),
 ) {
     @Suppress("TooGenericExceptionCaught", "ReturnCount", "ThrowsCount") // Distinct safe aborts and unknown outcomes.
     fun commit(
@@ -66,11 +68,15 @@ internal class AtomicCommit(
             throw error
         }
         val committed = try {
-            SingleKeyCommit(session, timestamp).commit(primary, start, commitTs, ceiling)
+            primaryCommit.commit(primary, start, commitTs, ceiling)
         } catch (_: CommitRefused) {
             // Explicit refusal means no primary decision exists. Never do this after transport ambiguity.
             resolve(entries, start, 0)
             return false
+        } catch (error: CommitNotApplied) {
+            // No decision was applied; clean up without replaying a failed storage operation.
+            resolve(entries, start, 0)
+            throw error
         }
         // Failure here cannot undo the durable primary decision. Readers resolve remaining locks.
         val secondaries = entries.drop(1)

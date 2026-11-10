@@ -36,15 +36,16 @@ class BatchRetryTest {
     @Test
     fun `unknown commit stops the batch instead of returning replayable unprocessed items`() {
         val table = Table("Locks", "id", "pk", 0, null)
-        val writes = listOf("a", "b").map { BatchWrite(table, it, obj(), null, emptyMap()) }
-        var attempts = 0
+        val writes = listOf("a", "b", "c").map { BatchWrite(table, it, obj(), null, emptyMap()) }
+        val attempts = mutableListOf<String>()
         assertFailsWith<CommitUnknown> {
             executeBatch(writes, Capacity(obj())) {
-                attempts++
-                throw CommitUnknown(IllegalStateException("Lost response"))
+                attempts += it.address
+                if (it.address == "b") throw CommitUnknown(IllegalStateException("Lost response"))
+                WriteResult(table, null, null)
             }
         }
-        assertEquals(1, attempts)
+        assertEquals(listOf("a", "b"), attempts)
     }
 
 }

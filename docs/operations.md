@@ -66,10 +66,11 @@ commit decision; an explicit fallback continues through ordinary two-phase commi
 Multi-key, metadata and index-entry transactions remain on 2PC. Set
 `TIKRONOS_ONE_PHASE_COMMIT=false` to disable 1PC without changing the stored format.
 
-A lost 1PC response is an unknown outcome, including after a lock wait. The API returns HTTP 500
-and does not replay the mutation or return it as an unprocessed batch item. The write may have
-committed, or a fallback lock may remain until TiKV resolves its TTL. Reconcile state before
-retrying a non-idempotent mutation; SDK retries can otherwise apply it twice.
+A lost 1PC response or an uncertain 2PC primary commit is an unknown outcome. The API returns
+HTTP 500 and does not roll back, replay the mutation or return it as an unprocessed batch item.
+The write may have committed; readers resolve remaining locks through TiKV using the primary
+decision or TTL. Earlier items in a failed batch may already be applied. Reconcile state before retrying a
+non-idempotent mutation; SDK retries can otherwise apply it twice.
 
 On 2PC, writes acknowledge the durable primary commit. Eight background workers complete
 secondary locks, with a queue of 64 transactions and caller-thread completion when full.
