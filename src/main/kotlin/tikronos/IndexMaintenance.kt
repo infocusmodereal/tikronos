@@ -1,20 +1,17 @@
 package tikronos
 
-import tikronos.model.Index
 import tikronos.model.Item
 import tikronos.model.Table
-import tikronos.storage.Records
 import tikronos.storage.Transaction
 import tikronos.storage.entry
 import tikronos.storage.existingEntry
 
-internal fun maintainIndexes(tx: Transaction, table: Table, old: Item?, new: Item?) {
-    for (index in table.indexes) maintain(tx, table, index, old, new)
-}
-
-private fun maintain(tx: Transaction, table: Table, index: Index, old: Item?, new: Item?) {
-    val before = old?.let { index.existingEntry(table, it) }
-    val after = new?.let { index.entry(table, it) }
-    if (before != null && before != after) tx.write(before, null)
-    if (after != null) tx.write(after, Records.encodeItem(requireNotNull(new)))
+/** Each index retains the full new item, using the same encoded bytes as the base row. */
+internal fun maintainIndexes(tx: Transaction, table: Table, old: Item?, new: Item?, encoded: ByteArray?) {
+    for (index in table.indexes) {
+        val before = old?.let { index.existingEntry(table, it) }
+        val after = new?.let { index.entry(table, it) }
+        if (before != null && before != after) tx.write(before, null)
+        if (after != null) tx.write(after, requireNotNull(encoded))
+    }
 }

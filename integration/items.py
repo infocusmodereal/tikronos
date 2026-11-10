@@ -45,8 +45,16 @@ def exercise(call=request):
 
         with ThreadPoolExecutor(3) as pool:
             list(pool.map(increment, range(3)))
-        res = call("BatchGetItem", RequestItems={table: {"Keys": [keys[0]], "ConsistentRead": True}})
-        assert res["Responses"][table][0]["counter"] == {"N": "1.3"}
+        missing = {"pk": partition, "sk": {"N": "999"}}
+        res = call("BatchGetItem", ReturnConsumedCapacity="TOTAL",
+                   RequestItems={table: {"Keys": keys[::-1] + [missing], "ConsistentRead": True,
+                                         "ProjectionExpression": "sk, #c",
+                                         "ExpressionAttributeNames": {"#c": "counter"}}})
+        found = {row["sk"]["N"]: row for row in res["Responses"][table]}
+        assert set(found) == {key["sk"]["N"] for key in keys} and not res["UnprocessedKeys"]
+        assert found[keys[0]["sk"]["N"]]["counter"] == {"N": "1.3"}
+        assert all(set(row) <= {"sk", "counter"} for row in found.values())
+        assert res["ConsumedCapacity"][0]["CapacityUnits"] == len(keys) + 1
         segments = [call("Scan", TableName=table, Segment=i, TotalSegments=3)["Items"] for i in range(3)]
         assert sorted(row["sk"]["N"] for segment in segments for row in segment) == sorted(k["sk"]["N"] for k in keys)
     finally:

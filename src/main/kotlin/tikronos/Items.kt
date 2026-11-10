@@ -146,8 +146,7 @@ internal class Items(private val db: Storage, private val tables: Tables) {
     }
 }
 
-internal fun encodeChecked(item: Item): ByteArray {
+internal fun validateItem(item: Item) {
     if (item.values.any { it.depth > MAX_DEPTH }) invalid("Document exceeds maximum nesting depth")
     if (itemSize(item) > MAX_ITEM_BYTES) invalid("Item exceeds 400 KiB")
-    return Records.encodeItem(item)
 }

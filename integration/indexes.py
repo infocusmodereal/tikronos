@@ -108,6 +108,13 @@ def exercise(call=request, restart=None):
                      KeyConditionExpression="pk = :p", ExpressionAttributeValues={":p": {"S": "p"}})["Items"]
         assert len(local) == 96 and all(set(row) == {"pk", "sk", "rank"} for row in local)
         key = {"pk": rows[12]["pk"], "sk": rows[12]["sk"]}
+        call("UpdateItem", TableName=name, Key=key, UpdateExpression="SET detail = :d",
+             ExpressionAttributeValues={":d": {"S": "updated"}})
+        local = call("Query", TableName=name, IndexName="localRank", ConsistentRead=True,
+                     KeyConditionExpression="pk = :p", ExpressionAttributeValues={":p": {"S": "p"}},
+                     ProjectionExpression="pk, sk, detail")["Items"]
+        assert next(row for row in local if row["sk"] == key["sk"])["detail"] == {"S": "updated"}
+        assert next(row for row in pages(**query) if row["sk"] == key["sk"])["detail"] == {"S": "updated"}
         call("UpdateItem", TableName=name, Key=key, UpdateExpression="REMOVE groupKey")
         assert len(pages(**query)) == 83
         call("DeleteTable", TableName=name)
