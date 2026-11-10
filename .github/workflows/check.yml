@@ -33,7 +33,13 @@ jobs:
             fi
             sleep 1
           done
-          TIKRONOS_TEST_PD=127.0.0.1:2379 ./gradlew integrationTest
+          if ! TIKRONOS_TEST_PD=127.0.0.1:2379 ./gradlew integrationTest; then
+            for report in build/test-results/integrationTest/TEST-*.xml; do
+              if grep -q '<failure' "$report"; then cat "$report"; fi
+            done
+            docker compose -f integration/compose.yaml logs --tail 200
+            exit 1
+          fi
           python3 integration/check.py
       - name: Verify packaged service
         run: |
