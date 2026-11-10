@@ -12,6 +12,8 @@ TiKronos implements a subset of the DynamoDB and DynamoDB Streams APIs. Support 
 | Discovery and backup status | `DescribeEndpoints`, `DescribeContinuousBackups` |
 | Streams | `ListStreams`, `DescribeStream`, `GetShardIterator`, `GetRecords` |
 
+For implementation details and follow-up opportunities, see the [operation audit](operation-audit.md).
+
 ## Data and queries
 
 Partition and optional sort keys accept strings, numbers or binary values. Attributes can also contain booleans, nulls, maps, lists and sets. Conditions, updates, filters and projections share expression evaluation. Conditional writes re-evaluate conditions after TiKV write conflicts.

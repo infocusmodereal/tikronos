@@ -15,6 +15,7 @@ nav:
   - Compatibility: compatibility.md
   - Operations: operations.md
   - Contributing: contributing.md
+  - Operation audit: operation-audit.md
 validation:
   links:
     not_found: warn
