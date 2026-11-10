@@ -1,5 +1,6 @@
 package tikronos.storage
 
+import tikronos.model.ScanOptions
 import java.util.concurrent.TimeUnit
 import org.tikv.common.Snapshot
 import org.tikv.common.TiSession
@@ -29,7 +30,7 @@ private val ZERO = ByteString.copyFrom(byteArrayOf(0))
  * The client iterator lacks reverse scans and sends unbounded end keys. Use the same MVCC timestamp
  * and SDK region/lock resolution, but give every KvScan a direction, upper bound and small limit.
  */
-internal class RangeReader(private val session: TiSession) {
+internal class RangeReader(private val session: TiSession, private val newSnapshot: () -> Snapshot) {
     private val regions
         get() = session.regionManager
 
@@ -38,15 +39,31 @@ internal class RangeReader(private val session: TiSession) {
 
     fun scan(
         first: ByteString, end: ByteString, forward: Boolean,
-        snapshot: Snapshot = session.createSnapshot(),
+        snapshot: Snapshot = newSnapshot(),
+        options: ScanOptions = ScanOptions(),
     ): Sequence<Kvrpcpb.KvPair> =
         sequence {
             val snap = snapshot
             var low = first
             var high = end
-            while (byteOrder.compare(low, high) < 0) {
-                val page = page(snap, low, high, forward)
-                for (pair in page.rows) if (!pair.value.isEmpty) yield(pair)
+            var remaining = options.limit
+            var largest = 0
+            while (remaining > 0 && byteOrder.compare(low, high) < 0) {
+                // Bound speculative reads even when observed rows are small: later values
+                // may be much larger. Do not add a probe RPC to short value scans.
+                val maximum = if (options.keyOnly) KEY_ROWS else VALUE_ROWS
+                val estimate = if (largest == 0) maximum
+                    else (options.targetBytes / largest).coerceAtLeast(1)
+                // The copy describes this single RPC; options retains the total scan demand.
+                val demand = options.copy(limit = minOf(remaining, maximum, estimate))
+                val page = page(snap, low, high, forward, demand)
+                for (pair in page.rows) {
+                    largest = maxOf(largest, pair.serializedSize)
+                    if (options.keyOnly || !pair.value.isEmpty) {
+                        yield(pair)
+                        if (--remaining == 0) return@sequence
+                    }
+                }
                 if (forward) low = page.next else high = page.next
             }
         }
@@ -55,7 +72,8 @@ internal class RangeReader(private val session: TiSession) {
 
     // Region churn, transport retries and MVCC lock resolution each restart the same cursor.
     @Suppress("LoopWithTooManyJumpStatements")
-    private fun page(snap: Snapshot, low: ByteString, high: ByteString, forward: Boolean): Page {
+    private fun page(snap: Snapshot, low: ByteString, high: ByteString, forward: Boolean,
+        options: ScanOptions): Page {
         val retry = ConcreteBackOffer.newScannerNextMaxBackOff()
         val resolved = mutableSetOf<Long>()
         while (true) {
@@ -64,7 +82,7 @@ internal class RangeReader(private val session: TiSession) {
             val to = if (region.endKey.isEmpty) high else minOf(high, region.endKey, byteOrder)
             val response =
                 try {
-                    fetch(region, snap.version, from to to, forward, resolved)
+                    fetch(region, snap.version, from to to, forward, resolved, options)
                 } catch (e: StatusRuntimeException) {
                     regions.onRequestFail(region)
                     retry.doBackOff(BackOffFuncType.BoTiKVRPC, e)
@@ -81,7 +99,7 @@ internal class RangeReader(private val session: TiSession) {
             if (resolveLocks(response, region, snap.version, retry, resolved)) continue
             val rows = codec.decodeKvPairs(response.pairsList)
             val next =
-                if (rows.size < RPC_ROWS) {
+                if (rows.size < options.limit) {
                     if (forward) to else from
                 } else if (forward) after(rows.last().key) else rows.last().key
             return Page(rows, next)
@@ -128,12 +146,14 @@ internal class RangeReader(private val session: TiSession) {
         return region
     }
 
+    @Suppress("LongParameterList") // Native scan bounds, direction and MVCC resolution context.
     private fun fetch(
         region: TiRegion,
         version: Long,
         bounds: Pair<ByteString, ByteString>,
         forward: Boolean,
         resolved: Set<Long>,
+        options: ScanOptions,
     ): Kvrpcpb.ScanResponse {
         val store = regions.getStoreById(region.leader.storeId)
         val channel = session.channelFactory.getChannel(store.address, session.pdClient.hostMapping)
@@ -145,7 +165,8 @@ internal class RangeReader(private val session: TiSession) {
                 .setStartKey(if (forward) range.first else range.second)
                 .setEndKey(if (forward) range.second else range.first)
                 .setReverse(!forward)
-                .setLimit(RPC_ROWS)
+                .setLimit(options.limit)
+                .setKeyOnly(options.keyOnly)
                 .build()
         return TikvGrpc.newBlockingStub(channel)
             .withDeadlineAfter(session.conf.scanTimeout, TimeUnit.MILLISECONDS)
@@ -153,6 +174,7 @@ internal class RangeReader(private val session: TiSession) {
     }
 
     companion object {
-        private const val RPC_ROWS = 8
+        private const val VALUE_ROWS = 8
+        private const val KEY_ROWS = 128
     }
 }

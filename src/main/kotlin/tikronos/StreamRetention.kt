@@ -1,6 +1,7 @@
 package tikronos
 
 import java.time.Instant
+import tikronos.model.ScanOptions
 import tikronos.model.StreamState
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
@@ -15,8 +16,8 @@ internal class StreamRetention(private val db: Storage) {
     fun tick() {
         val prefix = StreamRecords.PREFIX
         val first = if (cursor.isEmpty()) bytes(prefix) else after(bytes(cursor))
-        val descriptors = db.ranges.scan(first, prefixEnd(prefix), true)
-            .take(DESCRIPTOR_BATCH).toList()
+        val descriptors = db.ranges.scan(first, prefixEnd(prefix), true,
+            options = ScanOptions(limit = DESCRIPTOR_BATCH)).toList()
         cursor = if (descriptors.size < DESCRIPTOR_BATCH) "" else descriptors.last().key.toStringUtf8()
         val cutoff = Instant.now().epochSecond - STREAM_RETENTION_SECONDS
         for (row in descriptors) maintenanceAttempt("stream retention") {
@@ -26,8 +27,8 @@ internal class StreamRetention(private val db: Storage) {
 
     private fun prune(state: StreamState, cutoff: Long) {
         val events = StreamRecords.events(state)
-        val expired = db.ranges.scan(bytes(events), prefixEnd(events), true)
-            .take(BATCH_SIZE).takeWhile {
+        val expired = db.ranges.scan(bytes(events), prefixEnd(events), true,
+            options = ScanOptions(limit = BATCH_SIZE)).takeWhile {
                 json.readTree(it.value.toByteArray()).path("dynamodb")
                     .path("ApproximateCreationDateTime").longValue() <= cutoff
             }.toList()

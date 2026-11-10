@@ -1,6 +1,7 @@
 package tikronos.storage
 
 import tikronos.diagnostics.RequestEvents
+import tikronos.model.ScanOptions
 import org.tikv.common.Snapshot
 import org.tikv.common.TiSession
 import java.util.concurrent.Executor
@@ -32,14 +33,14 @@ internal class Storage(
         return directRead(snapshot, key)
     }
 
-    val ranges = RangeReader(session)
+    val ranges = RangeReader(session, ::snapshot)
 
     fun tables(after: String, limit: Int): List<String> {
         val start = CATALOG + after + if (after.isEmpty()) "" else "\u0000"
         return ranges
-            .scan(bytes(start), prefixEnd(CATALOG), forward = true)
+            .scan(bytes(start), prefixEnd(CATALOG), forward = true,
+                options = ScanOptions(limit = limit, keyOnly = true))
             .map { it.key.toStringUtf8().removePrefix(CATALOG) }
-            .take(limit)
             .toList()
     }
 
