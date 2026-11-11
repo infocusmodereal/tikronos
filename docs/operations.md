@@ -70,7 +70,8 @@ to eight at the same TiKV snapshot. Global indexes serve projected attributes on
 
 Existing full-copy entries remain readable alongside projected entries. On the first write to a
 legacy item, the same transaction replaces its partial index copies and marks the base row with
-the new record version. Untouched rows migrate on demand. When every index write can be skipped,
+the new record version. Rows that are never written keep their full-copy entries. There is no bulk
+rewrite. When every index write can be skipped,
 a base-row update can qualify for the existing single-key one-phase commit path.
 Stop all older instances and take a backup before upgrading. Older versions cannot read the new
 base records or serve unprojected attributes from compact entries. Restore the pre-upgrade

@@ -3,6 +3,8 @@ package tikronos
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 import org.junit.jupiter.api.Tag
 import tikronos.codec.parseItem
@@ -46,7 +48,13 @@ class IndexProjectionIntegrationTest {
                 val scan = obj("TableName" to table.name, "IndexName" to index.name, "Select" to "ALL_ATTRIBUTES")
                 assertEquals(updated, parseItem(Reads(db, Tables(db)).read(scan, false)["Items"].single()))
 
-                val changed = updated + ("label" to Value.text("two"))
+                assertTrue(Records.hasProjectedIndexes(db.read(db.snapshot(), address)))
+                val newer = updated + ("other" to Value.text("second"))
+                db.atomic { tx ->
+                    writer.change(tx, table, key) { newer }
+                    assertFalse(entry in tx.writes)
+                }
+                val changed = newer + ("label" to Value.text("two"))
                 writer.mutate(table, key) { changed }
                 assertEquals(changed - "other", Records.item(requireNotNull(db.read(db.snapshot(), entry))))
                 writer.mutate(table, key) { changed - "rank" }
@@ -93,7 +101,7 @@ class IndexProjectionIntegrationTest {
             indexes = listOf(index), hashed = true)
         val rows = (0 until 14).map {
             val order = Value.text(it.toString().padStart(2, '0'))
-            mapOf("pk" to Value.text("p"), "sk" to order, "rank" to order, "body" to Value.text("x".repeat(100 * 1024)))
+            mapOf("pk" to Value.text("p"), "sk" to order, "rank" to order, "body" to Value.text("x".repeat(110 * 1024)))
         }
         val query = obj("TableName" to table.name, "IndexName" to index.name, "ScanIndexForward" to false,
             "Limit" to 11, "KeyConditionExpression" to "pk = :p", "ProjectionExpression" to "sk",
@@ -103,9 +111,14 @@ class IndexProjectionIntegrationTest {
             db.atomic { it.write(Storage.CATALOG + table.name, Records.encodeTable(table)) }
             rows.forEachIndexed { i, row -> db.atomic {
                 it.write(table.address(row), Records.encodeItem(row))
-                val copy = if (i % 2 == 0) row else row - "body"
+                val copy = if (i % 10 == 0) row - "body" else row
                 it.write(requireNotNull(index.entry(table, row)), Records.encodeItem(copy))
             } }
+            val covered = reads.read(query.deepCopy().apply { remove("FilterExpression") }, true)
+            assertEquals(rows.asReversed().take(11).map { mapOf("sk" to it.getValue("sk")) },
+                covered["Items"].map(::parseItem))
+            assertEquals(rows[3] - "body", parseItem(covered.obj("LastEvaluatedKey")))
+
             val first = reads.read(query, true)
             assertEquals(9, first.path("ScannedCount").intValue())
             assertEquals(rows[5] - "body", parseItem(first.obj("LastEvaluatedKey")))
