@@ -15,6 +15,8 @@ import tikronos.model.itemSize
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.after
+import tikronos.storage.baseItems
+import tikronos.storage.projectedTo
 import tikronos.storage.byteOrder
 import tikronos.storage.bytes
 import tikronos.storage.segmentEdge
@@ -52,20 +54,16 @@ internal class Reads(private val db: Storage, private val tables: Tables) {
         val cursor = cursor(req, target, first, end)
         val startKey = if (forward && cursor != null) after(cursor) else first
         val endKey = if (!forward && cursor != null) cursor else end
-        val page =
-            collect(
-                db.ranges.scan(startKey, endKey, forward, snapshot, ScanOptions(limit = limit)).map {
-                    Records.item(it.value.toByteArray())
-                },
-                limit, target, fetch,
-            )
+        val rows = db.ranges.scan(startKey, endKey, forward, snapshot, ScanOptions(limit = limit))
+            .map { Records.item(it.value.toByteArray()) }
+        val page = collect(if (fetch) snapshot.baseItems(table, rows) else rows, limit, target, fetch)
         val included = page.items.filter { filter?.matches(it) != false }
         return obj("Count" to included.size, "ScannedCount" to page.items.size).apply {
             if (!countOnly)
                 set<ObjectNode>(
                     "Items",
                     json.valueToTree(included.map {
-                        val visible = if (available == null) it else it.filterKeys { name -> name in available }
+                        val visible = it.projectedTo(available)
                         wireItem(project(visible, projection))
                     }),
                 )

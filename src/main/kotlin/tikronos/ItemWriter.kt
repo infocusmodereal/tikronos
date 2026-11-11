@@ -34,15 +34,18 @@ internal class ItemWriter(private val db: Storage) {
             throw ApiError("ResourceNotFoundException", "Table no longer exists")
         val current = plan.table
         val address = current.address(key)
-        val previous = if (intent is WriteIntent.Transform || plan.needsPrevious)
-            PreviousItem.Read(tx.read(address)?.let(Records::item)) else PreviousItem.Unread
+        val needsPrevious = intent is WriteIntent.Transform || plan.needsPrevious
+        val stored = if (needsPrevious) tx.read(address) else null
+        val previous = if (needsPrevious) PreviousItem.Read(stored?.let(Records::item)) else PreviousItem.Unread
         val next = when (intent) {
             is WriteIntent.Replace -> intent.item
             is WriteIntent.Transform -> intent.apply((previous as PreviousItem.Read).item)
         }
-        val encoded = next?.also(::validateItem)?.let(Records::encodeItem)
+        val encoded = next?.also(::validateItem)?.let {
+            Records.encodeItem(it, projectedIndexes = current.indexes.any { index -> index.projection != "ALL" })
+        }
         if (previous is PreviousItem.Read) {
-            maintainIndexes(tx, current, previous.item, next, encoded)
+            tx.maintainIndexes(current, previous.item, next, encoded, Records.hasProjectedIndexes(stored))
             this.ttl.track(tx, current, previous.item, next, plan.ttl)
             streams.record(tx, plan, previous.item, next, ttl)
         }

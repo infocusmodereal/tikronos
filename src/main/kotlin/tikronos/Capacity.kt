@@ -8,6 +8,7 @@ import tikronos.model.Table
 import tikronos.model.itemSize
 import tikronos.storage.existingEntry
 import tikronos.storage.projected
+import tikronos.storage.projectedTo
 
 internal class Capacity(req: ObjectNode) {
     private val mode =
@@ -52,9 +53,8 @@ internal fun writeCapacity(table: Table, old: Item?, new: Item?): CapacityUnits 
         val before = old?.let { index.existingEntry(table, it) }
         val after = new?.let { index.existingEntry(table, it) }
         val projected = index.projected(table)
-        fun attributes(item: Item?) = item?.filterKeys { projected == null || it in projected }
-        val previous = old?.takeIf { before != null }?.let(::attributes)
-        val next = new?.takeIf { after != null }?.let(::attributes)
+        val previous = old?.takeIf { before != null }?.projectedTo(projected)
+        val next = new?.takeIf { after != null }?.projectedTo(projected)
         when {
             previous == next -> 0.0
             before != null && after != null && before != after ->

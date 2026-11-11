@@ -16,11 +16,17 @@ internal object Records {
     private const val STRING_VERSION: Byte = 1
     private const val TYPED_VERSION: Byte = 2
 
-    fun encodeItem(item: Item): ByteArray =
-        byteArrayOf(TYPED_VERSION) + mapper.writeValueAsBytes(wireItem(item))
+    // On base rows, this version certifies that partial indexes were written with their projections.
+    private const val PROJECTED_INDEX_VERSION: Byte = 3
+
+    fun hasProjectedIndexes(bytes: ByteArray?): Boolean = bytes?.firstOrNull() == PROJECTED_INDEX_VERSION
+
+    fun encodeItem(item: Item, projectedIndexes: Boolean = false): ByteArray =
+        byteArrayOf(if (projectedIndexes) PROJECTED_INDEX_VERSION else TYPED_VERSION) +
+            mapper.writeValueAsBytes(wireItem(item))
 
     fun item(bytes: ByteArray): Item {
-        if (bytes.first() == TYPED_VERSION)
+        if (bytes.first() == TYPED_VERSION || hasProjectedIndexes(bytes))
             return parseItem(mapper.readTree(bytes.inputStream(1, bytes.size - 1)))
         val (legacy, record) = decode(bytes)
         return record.properties().associate { (name, value) ->

@@ -12,6 +12,8 @@ import tikronos.storage.after
 import tikronos.storage.bytes
 import tikronos.storage.existingEntry
 import tikronos.storage.prefix
+import tikronos.storage.projected
+import tikronos.storage.projectedTo
 import tikronos.storage.prefixEnd
 
 internal class IndexBackfill(private val db: Storage) {
@@ -58,6 +60,7 @@ internal class IndexBackfill(private val db: Storage) {
 
     /** Bound derived writes by bytes; small prefetch windows limit unused read dependencies. */
     private fun writeBatch(tx: Transaction, table: Table, index: Index, rows: List<String>): String? {
+        val attributes = index.projected(table)
         var used = 0
         var last: String? = null
         for ((offset, address) in rows.withIndex()) {
@@ -66,7 +69,7 @@ internal class IndexBackfill(private val db: Storage) {
             val item = tx.read(address)?.let { Records.itemAt(table, address, it) }
             val entry = item?.let { index.existingEntry(table, it) }
             if (entry != null) {
-                val encoded = Records.encodeItem(checkNotNull(item))
+                val encoded = Records.encodeItem(checkNotNull(item).projectedTo(attributes))
                 if (used > 0 && used + encoded.size > WRITE_BYTES) return last
                 tx.write(entry, encoded)
                 used += encoded.size

@@ -13,11 +13,13 @@ import tikronos.model.Table
 import tikronos.storage.entry
 import tikronos.storage.schema
 import tikronos.storage.projected
+import tikronos.storage.projectedTo
 import tikronos.storage.address
 import tikronos.storage.bytes
 import tikronos.storage.key
 
 internal class ReadTarget(val table: Table, val index: Index?) {
+    private val attributes = index?.projected(table)
     val schema = index?.schema(table) ?: table
 
     fun key(item: Item): Item = table.key(item, false) +
@@ -28,17 +30,14 @@ internal class ReadTarget(val table: Table, val index: Index?) {
         return bytes(index?.entry(table, key) ?: table.address(key))
     }
 
-    fun storedSize(item: Item): Int {
-        val projected = index?.projected(table)
-        return itemSize(if (projected == null) item else item.filterKeys { it in projected })
-    }
+    fun storedSize(item: Item): Int = itemSize(item.projectedTo(attributes))
 
     fun fetchesTable(req: ObjectNode, paths: List<Path>?, filter: Predicate?): Boolean {
-        val projected = index?.projected(table) ?: return false
+        val projected = attributes ?: return false
         val unprojected = req.path("Select").asText() == "ALL_ATTRIBUTES" ||
             paths?.any { it.root !in projected } == true ||
             filter?.paths()?.any { it.root !in projected } == true
-        return index.local == true && unprojected
+        return index?.local == true && unprojected
     }
 
     fun capacity(bytes: Int, fetchedBytes: Int, strong: Boolean): CapacityUnits {
@@ -52,14 +51,14 @@ internal class ReadTarget(val table: Table, val index: Index?) {
     }
 
     fun validateFilter(filter: Predicate?) {
-        val available = index?.projected(table)
+        val available = attributes
         if (index?.local == false && available != null &&
             filter?.paths()?.any { it.root !in available } == true)
             invalid("Filter references attributes not projected in the index")
     }
 
     fun projection(req: ObjectNode, paths: List<Path>?): Set<String>? {
-        val available = index?.projected(table)
+        val available = attributes
         val select = req.path("Select").asText(if (index == null) "ALL_ATTRIBUTES" else "ALL_PROJECTED_ATTRIBUTES")
         if (select == "ALL_PROJECTED_ATTRIBUTES" && index == null) invalid("Select requires an index")
         if (index?.local == false && available != null) {
