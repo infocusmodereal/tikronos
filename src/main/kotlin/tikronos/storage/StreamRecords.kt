@@ -28,6 +28,12 @@ internal object StreamRecords {
     const val PREFIX = "tikronos/v1/streams/"
     fun config(tableId: String) = CONFIGS + tableId
     fun descriptor(arn: String) = PREFIX + arn
+    fun trimKey(arn: String) = "tikronos/v1/stream-trim/$arn"
+
+    /** Older descriptors carry the trim floor at upgrade. Subsequent progress lives in its own key. */
+    fun trimmed(state: StreamState, watermark: ByteArray?): Long =
+        maxOf(state.trimmed, watermark?.decodeToString()?.toLong() ?: 0L)
+
     fun events(state: StreamState) = "tikronos/v1/events/${state.label}/"
     fun sequence(value: Long) = value.toString().padStart(SEQUENCE_WIDTH, '0')
     private const val SEQUENCE_WIDTH = 20

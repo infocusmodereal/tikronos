@@ -61,6 +61,17 @@ recreated tables/indexes use independent keys. Retired checkpoints, like retired
 namespaces, are not physically reclaimed yet. Follow the stop-all-instances and backup/restore
 upgrade policy below; mixed old/new workers and in-place rollback are unsupported.
 
+## Stream retention
+
+A stream append commits the item, event and shard head in one TiKV transaction. Cleanup deletes
+expired events and advances a separate per-stream trim watermark in one transaction. Concurrent
+cleaners serialize on that watermark. Writers still serialize on the shard head to preserve order.
+
+Stream readers use one snapshot for the descriptor, watermark and event reads. The last trimmed
+sequence in an older descriptor remains a lower bound after upgrade. Stop all older instances and
+back up before upgrading. Older readers cannot see the separate watermark after cleanup, so
+rollback requires restoring the pre-upgrade backup.
+
 ## Secondary index storage
 
 New index entries store the table and index keys plus the attributes in the index projection.

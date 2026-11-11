@@ -19,8 +19,10 @@ import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
 import tikronos.storage.shard
+import tikronos.storage.Transaction
 import tikronos.storage.TtlRecords
 import tikronos.storage.address
+import tikronos.storage.timestampSeconds
 import tikronos.storage.timestampStartOfSecond
 
 @Tag("tikv")
@@ -220,9 +222,54 @@ class StreamTtlIntegrationTest {
             val retention = StreamRetention(db)
             advanceUntil({ db.read(db.snapshot(), expiredAddress) == null }) { retention.tick() }
             assertEquals(null, db.read(db.snapshot(), expiredAddress))
+            val restarted = StreamReads(db)
+            assertEquals("TrimmedDataAccessException", assertFailsWith<ApiError> {
+                restarted.records(obj("ShardIterator" to old))
+            }.code)
+            assertEquals(1, restarted.records(obj("ShardIterator" to horizon)).path("Records").size())
         } finally {
             db.atomic { it.write(poison, null) }
         }
+    }
+
+    @Test
+    fun `cleanup advances a legacy stream floor without retrying an in flight append`() = storage { db ->
+        val table = table(db)
+        val streams = Streams(db)
+        val spec = obj("StreamEnabled" to true, "StreamViewType" to "KEYS_ONLY")
+        val state = requireNotNull(db.atomic { streams.configure(it, table, spec) })
+        val descriptor = StreamRecords.descriptor(state.arn)
+        val floor = timestampStartOfSecond(Instant.now().epochSecond - STREAM_RETENTION_SECONDS - 10)
+        val expired = floor + 1
+        val event = StreamRecords.events(state) + StreamRecords.sequence(expired)
+        val watermark = StreamRecords.trimKey(state.arn)
+        fun start(arn: String) = StreamReads(db).describe(obj("StreamArn" to arn)).path("StreamDescription")
+            .path("Shards").single().path("SequenceNumberRange").path("StartingSequenceNumber").asText().toLong()
+        db.atomic { it.write(descriptor, StreamRecords.encode(state.copy(trimmed = floor, head = expired))) }
+        assertEquals(floor + 1, start(state.arn))
+        db.atomic { it.write(event, json.writeValueAsBytes(obj("dynamodb" to
+            obj("ApproximateCreationDateTime" to timestampSeconds(expired))))) }
+        val before = db.snapshot()
+        val writer = ItemWriter(db)
+        val key = mapOf("pk" to Value.text("live"))
+        val retention = StreamRetention(db)
+        var attempts = 0
+        db.atomic(Transaction(db.snapshot(), db, cached = false)) { tx ->
+            attempts++
+            writer.change(tx, table, key) { key }
+            if (attempts == 1) advanceUntil({ db.read(db.snapshot(), event) == null }) { retention.tick() }
+        }
+        assertEquals(1, attempts)
+        assertEquals(null, db.read(before, watermark))
+        check(db.read(before, event) != null)
+        assertEquals(expired + 1, start(state.arn))
+        val current = requireNotNull(streams.current(table, db.snapshot()))
+        assertEquals(floor, current.trimmed)
+        check(current.head > expired)
+        db.atomic { streams.disable(it, table) }
+        val next = requireNotNull(db.atomic { streams.configure(it, table, spec) })
+        assertEquals(1L, start(next.arn))
+        assertEquals(expired + 1, start(state.arn))
     }
 
     @Test

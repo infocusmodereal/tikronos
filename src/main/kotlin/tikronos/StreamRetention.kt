@@ -33,13 +33,13 @@ internal class StreamRetention(private val db: Storage) {
                     .path("ApproximateCreationDateTime").longValue() <= cutoff
             }.toList()
         if (expired.isEmpty()) return
+        val key = StreamRecords.trimKey(state.arn)
+        val last = expired.last().key.toStringUtf8().substringAfterLast('/').toLong()
         db.atomic { tx ->
-            val current = tx.read(StreamRecords.descriptor(state.arn))?.let(StreamRecords::decode)
-            if (current != null) {
+            // Competing cleaners serialize here. Events are immutable and their namespace is never reused.
+            if (last > StreamRecords.trimmed(state, tx.read(key))) {
                 expired.forEach { tx.write(it.key.toStringUtf8(), null) }
-                val last = expired.last().key.toStringUtf8().substringAfterLast('/').toLong()
-                tx.write(StreamRecords.descriptor(state.arn),
-                    StreamRecords.encode(current.copy(trimmed = maxOf(current.trimmed, last))))
+                tx.write(key, StreamRecords.sequence(last).encodeToByteArray())
             }
         }
     }
