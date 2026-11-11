@@ -169,3 +169,8 @@ internal class CatalogCache(private val db: Storage) {
         private const val RENEW_AHEAD = CatalogLeases.DURATION / 2
     }
 }
+
+internal fun CatalogCache.table(snapshot: Snapshot, name: String): Table? {
+    val key = Storage.CATALOG + name
+    return read(snapshot, key)?.let { decode(key, it) }
+}

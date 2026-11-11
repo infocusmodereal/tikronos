@@ -3,6 +3,7 @@ package tikronos
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.time.Instant
 import java.util.UUID
+import org.tikv.common.Snapshot
 import tikronos.codec.wireItem
 import tikronos.model.Item
 import tikronos.model.TableWritePlan
@@ -16,19 +17,15 @@ import tikronos.storage.Transaction
 import tikronos.storage.key
 
 internal class Streams(private val db: Storage) {
-    fun configure(tx: Transaction, table: Table, spec: ObjectNode) {
+    fun configure(tx: Transaction, table: Table, spec: ObjectNode): StreamState? {
         spec.fieldsOnly("StreamEnabled", "StreamViewType")
         if (!spec.path("StreamEnabled").isBoolean) invalid("Expected boolean StreamEnabled")
         val enabled = spec.flag("StreamEnabled")
-        val current = current(tx, table)
         val view = if (spec.has("StreamViewType")) spec.string("StreamViewType") else null
         if (view != null && view !in VIEWS) invalid("Invalid StreamViewType")
         if (enabled && view == null) invalid("StreamViewType required")
-        if (enabled && current?.enabled == true) invalid("Stream is already enabled")
-        if (!enabled) {
-            disable(tx, table)
-            return
-        }
+        if (!enabled) return disable(tx, table)
+        if (current(tx, table)?.enabled == true) invalid("Stream is already enabled")
         val label = Instant.now().toString() + "-" + UUID.randomUUID()
         val arn = tableArn(table) + "/stream/$label"
         val state = StreamState(arn, label, table.name, table.id, requireNotNull(view),
@@ -37,15 +34,16 @@ internal class Streams(private val db: Storage) {
         touchCatalog(tx, table)
         tx.write(StreamRecords.descriptor(arn), StreamRecords.encode(state))
         tx.write(StreamRecords.config(table.id), arn.encodeToByteArray())
+        return state
     }
 
-    fun disable(tx: Transaction, table: Table) {
-        val state = current(tx, table) ?: return
-        if (state.enabled) {
-            touchCatalog(tx, table)
-            tx.write(StreamRecords.descriptor(state.arn),
-                StreamRecords.encode(state.copy(enabled = false, closedAt = Instant.now().epochSecond)))
-        }
+    fun disable(tx: Transaction, table: Table): StreamState? {
+        val state = current(tx, table)
+        if (state?.enabled != true) return state
+        val closed = state.copy(enabled = false, closedAt = Instant.now().epochSecond)
+        touchCatalog(tx, table)
+        tx.write(StreamRecords.descriptor(state.arn), StreamRecords.encode(closed))
+        return closed
     }
 
     private fun touchCatalog(tx: Transaction, table: Table) {
@@ -53,18 +51,9 @@ internal class Streams(private val db: Storage) {
         tx.write(key, checkNotNull(tx.read(key)))
     }
 
-    fun decorate(table: Table, description: ObjectNode): ObjectNode {
-        val snap = db.snapshot()
-        val arn = db.read(snap, StreamRecords.config(table.id))?.decodeToString()
-        val state = arn?.let { db.read(snap, StreamRecords.descriptor(it))?.let(StreamRecords::decode) }
-        description.set<ObjectNode>("StreamSpecification", obj("StreamEnabled" to (state?.enabled == true)).apply {
-            if (state != null) put("StreamViewType", state.view)
-        })
-        if (state != null) {
-            description.put("LatestStreamArn", state.arn)
-            description.put("LatestStreamLabel", state.label)
-        }
-        return description
+    fun current(table: Table, snapshot: Snapshot): StreamState? {
+        val arn = db.read(snapshot, StreamRecords.config(table.id))?.decodeToString() ?: return null
+        return db.read(snapshot, StreamRecords.descriptor(arn))?.let(StreamRecords::decode)
     }
 
     fun record(tx: Transaction, plan: TableWritePlan, old: Item?, new: Item?, ttl: Boolean = false) {
@@ -78,8 +67,10 @@ internal class Streams(private val db: Storage) {
         tx.write(StreamRecords.descriptor(state.arn), StreamRecords.encode(state.copy(head = seq)))
     }
 
-    private fun current(tx: Transaction, table: Table): StreamState? {
-        val arn = tx.read(StreamRecords.config(table.id))?.decodeToString() ?: return null
+    fun current(tx: Transaction, table: Table): StreamState? {
+        val key = StreamRecords.config(table.id)
+        tx.coveredBy(Storage.CATALOG + table.name, listOf(key))
+        val arn = tx.read(key)?.decodeToString() ?: return null
         return current(tx, table, arn)
     }
 

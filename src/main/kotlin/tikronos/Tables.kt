@@ -7,21 +7,26 @@ import org.tikv.common.Snapshot
 import tikronos.model.Table
 import tikronos.storage.Records
 import tikronos.storage.Storage
+import tikronos.storage.table
 import tikronos.storage.TtlRecords
 import tikronos.storage.Transaction
 
 internal class Tables(private val db: Storage) {
     private val streams = Streams(db)
     fun find(name: String, snapshot: Snapshot = db.snapshot()): Table =
-        db.read(snapshot, Storage.CATALOG + name)
-            ?.let { db.catalog.decode(Storage.CATALOG + name, it) } ?: missing(name)
+        db.catalog.table(snapshot, name) ?: missing(name)
 
     fun find(name: String, tx: Transaction): Table =
         tx.table(name) ?: missing(name)
 
     fun describe(req: ObjectNode): ObjectNode {
         req.fieldsOnly("TableName")
-        return obj("Table" to describe(find(tableName(req))))
+        return obj("Table" to describe(tableName(req), db.snapshot()))
+    }
+
+    fun describe(name: String, snapshot: Snapshot): ObjectNode {
+        val table = find(name, snapshot)
+        return description(table, streams.current(table, snapshot))
     }
 
     fun create(req: ObjectNode): ObjectNode {
@@ -51,26 +56,26 @@ internal class Tables(private val db: Storage) {
                 hashed = true,
             )
         val table = base.copy(indexes = indexes(req, base), tags = parseTags(req))
-        db.atomic { tx ->
+        val stream = db.atomic { tx ->
             if (tx.read(Storage.CATALOG + name) != null)
                 throw ApiError("ResourceInUseException", "Table $name already exists")
             tx.write(Storage.CATALOG + name, Records.encodeTable(table))
-            if (req.has("StreamSpecification")) streams.configure(tx, table, req.obj("StreamSpecification"))
+            if (req.has("StreamSpecification")) streams.configure(tx, table, req.obj("StreamSpecification")) else null
         }
-        return obj("TableDescription" to describe(table))
+        return obj("TableDescription" to description(table, stream))
     }
 
     fun delete(req: ObjectNode): ObjectNode {
         req.fieldsOnly("TableName")
         val name = tableName(req)
-        val table = db.atomic { tx ->
-            val table = tx.table(name) ?: missing(name)
-            streams.disable(tx, table)
-            tx.write(TtlRecords.config(table.id), null)
+        val (table, stream) = db.atomic { tx ->
+            val current = tx.table(name) ?: missing(name)
+            val closed = streams.disable(tx, current)
+            tx.write(TtlRecords.config(current.id), null)
             tx.write(Storage.CATALOG + name, null)
-            table
+            current to closed
         }
-        return obj("TableDescription" to describe(table))
+        return obj("TableDescription" to description(table, stream))
     }
 
     fun update(req: ObjectNode): ObjectNode {
@@ -78,18 +83,16 @@ internal class Tables(private val db: Storage) {
             "BillingMode", "ProvisionedThroughput", "StreamSpecification")
         val name = tableName(req)
         if (req.size() == 1) invalid("UpdateTable requires an update")
-        val table = db.atomic { tx ->
+        val (table, stream) = db.atomic { tx ->
             val old = tx.table(name) ?: missing(name)
             val changed = updateCatalog(req, old)
-            if (req.has("StreamSpecification"))
-                streams.configure(tx, changed, req.obj("StreamSpecification"))
+            val state = if (req.has("StreamSpecification"))
+                streams.configure(tx, changed, req.obj("StreamSpecification")) else streams.current(tx, changed)
             tx.write(Storage.CATALOG + name, Records.encodeTable(changed))
-            changed
+            changed to state
         }
-        return obj("TableDescription" to describe(table))
+        return obj("TableDescription" to description(table, stream))
     }
-
-    private fun describe(table: Table) = streams.decorate(table, description(table))
 
     fun list(req: ObjectNode): ObjectNode {
         req.fieldsOnly("Limit", "ExclusiveStartTableName")
