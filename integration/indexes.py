@@ -32,6 +32,8 @@ def exercise(call=request, restart=None):
     name = "Indexes" + uuid4().hex
     create = dict(TableName=name, BillingMode="PAY_PER_REQUEST", KeySchema=schema("pk", "sk"),
                   AttributeDefinitions=definition("pk", "sk", "rank"),
+                  GlobalSecondaryIndexes=[{"IndexName": "byRank", "KeySchema": schema("rank"),
+                                           "Projection": {"ProjectionType": "INCLUDE", "NonKeyAttributes": ["detail"]}}],
                   LocalSecondaryIndexes=[{"IndexName": "localRank", "KeySchema": schema("pk", "rank"),
                                           "Projection": {"ProjectionType": "KEYS_ONLY"}}])
     table = call("CreateTable", **create)["TableDescription"]
@@ -43,14 +45,18 @@ def exercise(call=request, restart=None):
         assert not call("ListTagsOfResource", ResourceArn=arn)["Tags"]
         assert call("DescribeContinuousBackups", TableName=name)["ContinuousBackupsDescription"]["ContinuousBackupsStatus"] == "DISABLED"
         rows = [{"pk": {"S": "p"}, "sk": {"S": f"{i:03}"}, "groupKey": {"S": "g"},
-                 "rank": {"S": "a" if i % 2 else "a\0"}, "detail": {"S": "payload"}} for i in range(96)]
+                 "rank": {"S": "a" if i % 2 else "a\0"}, "detail": {"S": "payload"},
+                 "unprojected": {"S": "base"}} for i in range(96)]
         for row in rows:
             call("PutItem", TableName=name, Item=row)
         call("PutItem", TableName=name, Item={"pk": {"S": "p"}, "sk": {"S": "sparse"}})
         status = call("UpdateTable", TableName=name, AttributeDefinitions=definition("groupKey", "rank"),
                       GlobalSecondaryIndexUpdates=[{"Create": {"IndexName": "byGroup", "KeySchema": schema("groupKey", "rank"),
                                                                 "Projection": {"ProjectionType": "ALL"}}}])
-        assert status["TableDescription"]["GlobalSecondaryIndexes"][0]["IndexStatus"] == "CREATING"
+        def by_group_status(description):
+            return next(i["IndexStatus"] for i in description["GlobalSecondaryIndexes"] if i["IndexName"] == "byGroup")
+
+        assert by_group_status(status["TableDescription"]) == "CREATING"
 
         def concurrent_updates():
             for row in rows[:12]:
@@ -59,13 +65,13 @@ def exercise(call=request, restart=None):
 
         if restart:
             before = call("DescribeTable", TableName=name)["Table"]
-            assert before["GlobalSecondaryIndexes"][0]["IndexStatus"] == "CREATING"
+            assert by_group_status(before) == "CREATING"
             restart()
         with ThreadPoolExecutor(1) as pool:
             pool.submit(concurrent_updates).result()
         for _ in range(120):
             desc = call("DescribeTable", TableName=name)["Table"]
-            if desc["GlobalSecondaryIndexes"][0]["IndexStatus"] == "ACTIVE":
+            if by_group_status(desc) == "ACTIVE":
                 break
             time.sleep(0.5)
         else:
@@ -96,6 +102,11 @@ def exercise(call=request, restart=None):
         forward = pages(**query)
         backward = pages(**query, ScanIndexForward=False)
         assert len(forward) == 84 and backward == forward[::-1]
+        assert all(row["unprojected"] == {"S": "base"} for row in forward)
+        partial = dict(TableName=name, IndexName="byRank")
+        assert all("unprojected" not in row for row in call("Scan", **partial)["Items"])
+        validation(call, "Scan", **partial, ProjectionExpression="unprojected")
+        validation(call, "Scan", **partial, FilterExpression="attribute_exists(unprojected)")
         assert len({row["sk"]["S"] for row in forward}) == 84
         assert [row["rank"]["S"] for row in forward] == sorted(row["rank"]["S"] for row in forward)
         equals = pages(TableName=name, IndexName="byGroup", KeyConditionExpression="groupKey = :g AND #r = :r",
@@ -107,12 +118,19 @@ def exercise(call=request, restart=None):
         local = call("Query", TableName=name, IndexName="localRank", ConsistentRead=True,
                      KeyConditionExpression="pk = :p", ExpressionAttributeValues={":p": {"S": "p"}})["Items"]
         assert len(local) == 96 and all(set(row) == {"pk", "sk", "rank"} for row in local)
+        order = [row["sk"] for row in local]
         key = {"pk": rows[12]["pk"], "sk": rows[12]["sk"]}
         call("UpdateItem", TableName=name, Key=key, UpdateExpression="SET detail = :d",
              ExpressionAttributeValues={":d": {"S": "updated"}})
         local = call("Query", TableName=name, IndexName="localRank", ConsistentRead=True,
                      KeyConditionExpression="pk = :p", ExpressionAttributeValues={":p": {"S": "p"}},
                      ProjectionExpression="pk, sk, detail")["Items"]
+        assert [row["sk"] for row in local] == order
+        filtered = call("Scan", TableName=name, IndexName="localRank", Select="COUNT",
+                        FilterExpression="detail = :d", ExpressionAttributeValues={":d": {"S": "updated"}},
+                        ReturnConsumedCapacity="INDEXES")
+        assert (filtered["Count"], filtered["ScannedCount"]) == (1, 96)
+        assert filtered["ConsumedCapacity"]["Table"]["CapacityUnits"] > 0
         assert next(row for row in local if row["sk"] == key["sk"])["detail"] == {"S": "updated"}
         assert next(row for row in pages(**query) if row["sk"] == key["sk"])["detail"] == {"S": "updated"}
         call("UpdateItem", TableName=name, Key=key, UpdateExpression="REMOVE groupKey")

@@ -61,6 +61,21 @@ recreated tables/indexes use independent keys. Retired checkpoints, like retired
 namespaces, are not physically reclaimed yet. Follow the stop-all-instances and backup/restore
 upgrade policy below; mixed old/new workers and in-place rollback are unsupported.
 
+## Secondary index storage
+
+New index entries store the table and index keys plus the attributes in the index projection.
+An update that changes only attributes outside an active index projection skips that index write.
+Queries and scans that need an unprojected local index attribute fetch base rows in batches of up
+to eight at the same TiKV snapshot. Global indexes serve projected attributes only.
+
+Existing full-copy entries remain readable alongside projected entries. On the first write to a
+legacy item, the same transaction replaces its partial index copies and marks the base row with
+the new record version. Untouched rows migrate on demand. When every index write can be skipped,
+a base-row update can qualify for the existing single-key one-phase commit path.
+Stop all older instances and take a backup before upgrading. Older versions cannot read the new
+base records or serve unprojected attributes from compact entries. Restore the pre-upgrade
+backup to roll back.
+
 ## Range reads
 
 Scans use one MVCC snapshot per request and keep TiKV's region routing and lock resolution.

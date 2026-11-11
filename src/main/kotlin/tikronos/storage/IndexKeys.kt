@@ -23,6 +23,10 @@ internal fun Index.projected(table: Table): Set<String>? =
     if (projection == "ALL") null else
         (listOfNotNull(table.partitionKey, table.sortKey, partitionKey, sortKey) + attributes).toSet()
 
+/** Project logical attributes even when reading an older, full-copy index entry. */
+internal fun Item.projectedTo(attributes: Set<String>?): Item =
+    if (attributes == null) this else filterKeys { it in attributes }
+
 // Existing rows may predate an index definition and contain an invalid index key.
 internal fun Index.existingEntry(table: Table, item: Item): String? = try {
     entry(table, item)

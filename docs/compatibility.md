@@ -32,7 +32,7 @@ Streams expose one shard per stream, four image modes, authenticated 15-minute i
 - Some Query/Scan cursor validation and error wording differ, including HASH-only Query with `ExclusiveStartKey`.
 - Provisioned capacity is reported but not enforced. Backup status is DISABLED; no backup/restore API is implemented.
 - Transaction APIs, global tables and PartiQL are not implemented.
-- Cached table definitions use coordinated leases. Writes to the same item and an enabled stream head still contend; schema changes drain catalog leases. See [Operations](operations.md#table-catalog). Index copies retain complete items internally.
+- Cached table definitions use coordinated leases. Writes to the same item and an enabled stream head still contend; schema changes drain catalog leases. See [Operations](operations.md#table-catalog).
 - Deleting a table or index retires its namespace; physical reclamation is pending.
 - An uncertain commit returns HTTP 500 `InternalServerError` and is recorded as `unknown_outcome` when request JFR events are enabled. Client retries may repeat an applied write; exactly-once execution is not provided. See [Write completion](operations.md#write-completion).
 
