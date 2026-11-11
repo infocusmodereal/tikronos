@@ -31,14 +31,20 @@ internal class StreamRetention(private val db: Storage) {
             options = ScanOptions(limit = BATCH_SIZE)).takeWhile {
                 json.readTree(it.value.toByteArray()).path("dynamodb")
                     .path("ApproximateCreationDateTime").longValue() <= cutoff
-            }.toList()
+            }.map { it.key.toStringUtf8().substringAfterLast('/').toLong() }.toList()
+        deleteBatch(state, expired)
+    }
+
+    /** A slower cleaner can submit an expired prefix after a newer batch has already committed. */
+    internal fun deleteBatch(state: StreamState, expired: List<Long>) {
         if (expired.isEmpty()) return
         val key = StreamRecords.trimKey(state.arn)
-        val last = expired.last().key.toStringUtf8().substringAfterLast('/').toLong()
+        val prefix = StreamRecords.events(state)
+        val last = expired.last()
         db.atomic { tx ->
             // Competing cleaners serialize here. Events are immutable and their namespace is never reused.
             if (last > StreamRecords.trimmed(state, tx.read(key))) {
-                expired.forEach { tx.write(it.key.toStringUtf8(), null) }
+                expired.forEach { tx.write(prefix + StreamRecords.sequence(it), null) }
                 tx.write(key, StreamRecords.sequence(last).encodeToByteArray())
             }
         }

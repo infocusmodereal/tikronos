@@ -9,6 +9,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import org.junit.jupiter.api.Tag
 import tikronos.model.BackfillProgress
+import tikronos.model.ScanOptions
 import tikronos.model.StreamPosition
 import tikronos.model.Table
 import tikronos.model.Value
@@ -18,6 +19,8 @@ import tikronos.storage.BackfillRecords
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
+import tikronos.storage.bytes
+import tikronos.storage.prefixEnd
 import tikronos.storage.shard
 import tikronos.storage.Transaction
 import tikronos.storage.TtlRecords
@@ -270,6 +273,37 @@ class StreamTtlIntegrationTest {
         val next = requireNotNull(db.atomic { streams.configure(it, table, spec) })
         assertEquals(1L, start(next.arn))
         assertEquals(expired + 1, start(state.arn))
+    }
+
+    @Test
+    fun `a delayed cleaner cannot move the watermark behind a newer batch`() = storage { db ->
+        val table = table(db)
+        val state = requireNotNull(db.atomic { Streams(db).configure(it, table,
+            obj("StreamEnabled" to true, "StreamViewType" to "KEYS_ONLY")) })
+        val key = mapOf("pk" to Value.text("live"))
+        ItemWriter(db).mutate(table, key) { key }
+        val prefix = StreamRecords.events(state)
+        val first = timestampStartOfSecond(Instant.now().epochSecond - STREAM_RETENTION_SECONDS - 1)
+        val last = first + 64
+        val data = obj("ApproximateCreationDateTime" to timestampSeconds(first))
+        val expired = json.writeValueAsBytes(obj("dynamodb" to data))
+        db.atomic { tx -> (first..last).forEach { tx.write(prefix + StreamRecords.sequence(it), expired) } }
+
+        val delayed = StreamRetention(db)
+        val firstBatch = db.ranges.scan(bytes(prefix), prefixEnd(prefix), true,
+            options = ScanOptions(limit = 64, keyOnly = true))
+            .map { it.key.toStringUtf8().substringAfterLast('/').toLong() }.toList()
+        val other = StreamRetention(db)
+        advanceUntil({ db.read(db.snapshot(), prefix + StreamRecords.sequence(last)) == null }) { other.tick() }
+        delayed.deleteBatch(state, firstBatch)
+        val watermark = requireNotNull(db.read(db.snapshot(), StreamRecords.trimKey(state.arn)))
+        assertEquals(last, watermark.decodeToString().toLong())
+        assertEquals(1, db.ranges.scan(bytes(prefix), prefixEnd(prefix), true).count())
+        val reads = StreamReads(db)
+        val horizon = reads.iterator(obj("StreamArn" to state.arn, "ShardId" to state.shard,
+            "ShardIteratorType" to "TRIM_HORIZON")).string("ShardIterator")
+        val remaining = reads.records(obj("ShardIterator" to horizon)).path("Records").single()
+        assertEquals("INSERT", remaining["eventName"].asText())
     }
 
     @Test
