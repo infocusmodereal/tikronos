@@ -32,7 +32,7 @@ class StreamTtlIntegrationTest {
             val table = table(db)
             val streams = Streams(db)
             db.atomic { streams.configure(it, table, obj("StreamEnabled" to true, "StreamViewType" to view)) }
-            val arn = streams.decorate(table, obj()).string("LatestStreamArn")
+            val arn = requireNotNull(streams.current(table, db.snapshot())).arn
             val writer = ItemWriter(db)
             val key = mapOf("pk" to Value.text("row"))
             val first = key + ("data" to Value.text("one"))
@@ -54,7 +54,7 @@ class StreamTtlIntegrationTest {
             db.atomic { streams.disable(it, table) }
             assertFalse(StreamReads(db).records(obj("ShardIterator" to token)).has("NextShardIterator"))
             db.atomic { streams.configure(it, table, obj("StreamEnabled" to true, "StreamViewType" to view)) }
-            val newArn = streams.decorate(table, obj()).string("LatestStreamArn")
+            val newArn = requireNotNull(streams.current(table, db.snapshot())).arn
             assertNotEquals(arn, newArn)
             val newShard = reads.describe(obj("StreamArn" to newArn)).path("StreamDescription").path("Shards")[0]
                 .path("ShardId").textValue()
@@ -71,7 +71,7 @@ class StreamTtlIntegrationTest {
         val table = table(db)
         val streams = Streams(db)
         db.atomic { streams.configure(it, table, obj("StreamEnabled" to true, "StreamViewType" to "KEYS_ONLY")) }
-        val arn = streams.decorate(table, obj()).string("LatestStreamArn")
+        val arn = requireNotNull(streams.current(table, db.snapshot())).arn
         db.atomic { streams.disable(it, table) }
         val shard = StreamReads(db).describe(obj("StreamArn" to arn))
             .path("StreamDescription").path("Shards")[0]
@@ -103,7 +103,7 @@ class StreamTtlIntegrationTest {
         writer.mutate(table, key) { old }
         TtlWorker(db, Ttl(db)).tick(writer)
         assertEquals(null, db.read(db.snapshot(), table.address(key)))
-        val arn = streams.decorate(table, obj()).string("LatestStreamArn")
+        val arn = requireNotNull(streams.current(table, db.snapshot())).arn
         val reads = StreamReads(db)
         val shard = reads.describe(obj("StreamArn" to arn)).path("StreamDescription").path("Shards")[0]
             .path("ShardId").textValue()
@@ -187,7 +187,7 @@ class StreamTtlIntegrationTest {
         val streams = Streams(db)
         db.atomic { streams.configure(it, table,
             obj("StreamEnabled" to true, "StreamViewType" to "KEYS_ONLY")) }
-        val arn = streams.decorate(table, obj()).string("LatestStreamArn")
+        val arn = requireNotNull(streams.current(table, db.snapshot())).arn
         val key = mapOf("pk" to Value.text("row"))
         ItemWriter(db).mutate(table, key) { key }
         val state = StreamRecords.decode(requireNotNull(db.read(db.snapshot(), StreamRecords.descriptor(arn))))
@@ -231,7 +231,7 @@ class StreamTtlIntegrationTest {
         val streams = Streams(db)
         db.atomic { streams.configure(it, table,
             obj("StreamEnabled" to true, "StreamViewType" to "NEW_IMAGE")) }
-        val arn = streams.decorate(table, obj()).string("LatestStreamArn")
+        val arn = requireNotNull(streams.current(table, db.snapshot())).arn
         val writer = ItemWriter(db)
         val key = mapOf("pk" to Value.text("row"))
         assertFailsWith<IllegalStateException> {

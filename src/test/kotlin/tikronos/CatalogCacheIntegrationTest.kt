@@ -224,7 +224,7 @@ class CatalogCacheIntegrationTest {
             val result = writer.mutate(table, key, WriteIntent.Replace(null))
             assertEquals(key, result.old)
             writer.mutate(table, key, WriteIntent.Replace(key))
-            val arn = Streams(second).decorate(table, obj()).string("LatestStreamArn")
+            val arn = requireNotNull(Streams(second).current(table, second.snapshot())).arn
             val state = StreamRecords.decode(checkNotNull(first.read(first.snapshot(),
                 StreamRecords.descriptor(arn))))
             val prefix = StreamRecords.events(state)

@@ -3,6 +3,7 @@ package tikronos
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.time.Instant
 import java.util.UUID
+import org.tikv.common.Snapshot
 import tikronos.model.ExpiryCandidate
 import tikronos.model.Item
 import tikronos.model.Table
@@ -12,6 +13,7 @@ import tikronos.model.policy
 import tikronos.model.attributeName
 import tikronos.storage.Records
 import tikronos.storage.Storage
+import tikronos.storage.table
 import tikronos.storage.Transaction
 import tikronos.storage.TtlRecords
 import tikronos.storage.address
@@ -29,7 +31,7 @@ internal class Ttl(private val db: Storage) {
         if (!spec.path("Enabled").isBoolean) invalid("Expected boolean Enabled")
         val enabled = spec.flag("Enabled")
         db.atomic { tx ->
-            val table = tx.read(Storage.CATALOG + name)?.let(Records::table)
+            val table = tx.table(name)
                 ?: throw ApiError("ResourceNotFoundException", "Table does not exist")
             val old = tx.read(TtlRecords.config(table.id))?.let(TtlRecords::state)
             if (old?.enabled == true && enabled) invalid("TTL is already enabled")
@@ -45,10 +47,13 @@ internal class Ttl(private val db: Storage) {
 
     fun describe(req: ObjectNode): ObjectNode {
         req.fieldsOnly("TableName")
-        val snap = db.snapshot()
-        val table = db.read(snap, Storage.CATALOG + Tables.tableName(req))?.let(Records::table)
+        return describe(Tables.tableName(req), db.snapshot())
+    }
+
+    fun describe(name: String, snapshot: Snapshot): ObjectNode {
+        val table = db.catalog.table(snapshot, name)
             ?: throw ApiError("ResourceNotFoundException", "Table does not exist")
-        val state = db.read(snap, TtlRecords.config(table.id))?.let(TtlRecords::state)
+        val state = db.read(snapshot, TtlRecords.config(table.id))?.let(TtlRecords::state)
         return obj("TimeToLiveDescription" to obj("TimeToLiveStatus" to
             if (state?.enabled == true) "ENABLED" else "DISABLED").apply {
                 if (state != null) put("AttributeName", state.attribute)

@@ -36,6 +36,11 @@ not require it; TiKV still checks write conflicts.
 The same storage gate covers API schema changes, changed tags, index activation, and deletion/recreation.
 Tag requests that leave the tag set unchanged do not rewrite the catalog.
 
+`DescribeTable` reads the definition and its stream from one TiKV snapshot. `DescribeTimeToLive`
+uses one snapshot for the definition and TTL policy. Create, update and delete responses describe
+the table and stream from the transaction that committed, even if another API instance changes
+the stream before the response arrives.
+
 ## Maintenance checkpoints
 
 Index and TTL backfill progress lives under `tikronos/v1/backfill/`, scoped to table and index

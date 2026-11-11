@@ -2,6 +2,7 @@ package tikronos
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import tikronos.model.StreamState
 import tikronos.model.Table
 import tikronos.model.Throughput
 import tikronos.model.attributeName
@@ -63,7 +64,7 @@ private fun JsonNode.capacity(field: String): Long =
         .takeIf { it.isIntegralNumber && it.canConvertToLong() && it.longValue() > 0 }
         ?.longValue() ?: invalid("Expected positive $field")
 
-internal fun description(table: Table) =
+internal fun description(table: Table, stream: StreamState?) =
     obj(
             "TableName" to table.name,
             "TableArn" to tableArn(table),
@@ -81,6 +82,13 @@ internal fun description(table: Table) =
                 },
         )
         .apply {
+            set<ObjectNode>("StreamSpecification", obj("StreamEnabled" to (stream?.enabled == true)).apply {
+                if (stream != null) put("StreamViewType", stream.view)
+            })
+            if (stream != null) {
+                put("LatestStreamArn", stream.arn)
+                put("LatestStreamLabel", stream.label)
+            }
             for (local in listOf(false, true)) {
                 val indexes = table.indexes.filter { it.local == local }
                 if (indexes.isNotEmpty()) set<ObjectNode>(
