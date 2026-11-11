@@ -8,11 +8,13 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import org.junit.jupiter.api.Tag
+import tikronos.model.BackfillProgress
 import tikronos.model.StreamPosition
 import tikronos.model.Table
 import tikronos.model.Value
 import tikronos.model.WriteIntent
 import tikronos.model.policy
+import tikronos.storage.BackfillRecords
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
@@ -122,13 +124,17 @@ class StreamTtlIntegrationTest {
         Ttl(db).update(obj("TableName" to table.name,
             "TimeToLiveSpecification" to obj("Enabled" to true, "AttributeName" to "expires")))
         val poison = TtlRecords.CANDIDATES + "00000000000000000000/" + UUID.randomUUID()
-        db.atomic { it.write(poison, "invalid candidate".encodeToByteArray()) }
+        val poisonConfig = TtlRecords.CONFIGS + "00000-poison-" + UUID.randomUUID()
+        db.atomic {
+            it.write(poison, "invalid candidate".encodeToByteArray())
+            it.write(poisonConfig, "invalid policy".encodeToByteArray())
+        }
         try {
             val worker = TtlWorker(db, Ttl(db))
             advanceUntil({ db.read(db.snapshot(), table.address(key)) == null }) { worker.tick(writer) }
             assertEquals(null, db.read(db.snapshot(), table.address(key)))
         } finally {
-            db.atomic { it.write(poison, null) }
+            db.atomic { it.write(poison, null); it.write(poisonConfig, null) }
         }
     }
 
@@ -146,9 +152,13 @@ class StreamTtlIntegrationTest {
         }
         Ttl(db).update(obj("TableName" to table.name,
             "TimeToLiveSpecification" to obj("Enabled" to true, "AttributeName" to "expires")))
-        TtlWorker(db, Ttl(db)).tick(writer)
-        val checkpoint = TtlRecords.state(requireNotNull(db.read(db.snapshot(), TtlRecords.config(table.id))))
-        val cursor = requireNotNull(checkpoint.cursor)
+        val state = TtlRecords.state(requireNotNull(db.read(db.snapshot(), TtlRecords.config(table.id))))
+        val progressKey = BackfillRecords.ttl(state)
+        db.assertMetadataUnchanged(listOf(Storage.CATALOG + table.name, TtlRecords.config(table.id))) {
+            TtlWorker(db, Ttl(db)).tick(writer)
+        }
+        assertEquals(state, TtlRecords.state(requireNotNull(db.read(db.snapshot(), TtlRecords.config(table.id)))))
+        val cursor = requireNotNull(BackfillRecords.decode(db.read(db.snapshot(), progressKey), null).cursor)
         check(cursor.isNotEmpty() && cursor < table.address(keys.last()))
         val behind = keys.first { table.address(it) < cursor }
         val ahead = keys.first { table.address(it) > cursor }
@@ -158,9 +168,11 @@ class StreamTtlIntegrationTest {
         val resumed = TtlWorker(db, Ttl(db))
         resumed.tick(writer)
         assertEquals(null,
-            TtlRecords.state(requireNotNull(db.read(db.snapshot(), TtlRecords.config(table.id)))).cursor)
+            BackfillRecords.decode(db.read(db.snapshot(), progressKey), "").cursor)
+        resumed.advance(state, BackfillProgress(""))
+        assertEquals(null, BackfillRecords.decode(db.read(db.snapshot(), progressKey), "").cursor)
         advanceUntil({
-            TtlRecords.state(requireNotNull(db.read(db.snapshot(), TtlRecords.config(table.id)))).cursor == null &&
+            BackfillRecords.decode(db.read(db.snapshot(), progressKey), "").cursor == null &&
                 db.read(db.snapshot(), table.address(ahead)) == null &&
                 db.read(db.snapshot(), table.address(keys.last())) == null
         }) { resumed.tick(writer) }

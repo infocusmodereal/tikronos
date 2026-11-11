@@ -22,6 +22,8 @@ import tikronos.storage.loadWritePlan
 import tikronos.storage.CatalogLeases
 import tikronos.storage.Prewrite
 import tikronos.storage.AtomicCommit
+import tikronos.model.BackfillProgress
+import tikronos.storage.BackfillRecords
 import tikronos.storage.Records
 import tikronos.storage.Storage
 
@@ -252,11 +254,12 @@ class CatalogCacheIntegrationTest {
             tx.write(leaseKey, CatalogLeases.encode(CatalogLease(tx.version + CatalogLeases.DURATION)))
             val descriptor = StreamRecords.descriptor(checkNotNull(plan.streamArn))
             val ttlKey = TtlRecords.config(table.id)
+            val state = TtlRecords.state(checkNotNull(second.read(second.snapshot(), ttlKey)))
+            val progressKey = BackfillRecords.ttl(state)
             second.uncachedAtomic { progress ->
                 val stream = StreamRecords.decode(checkNotNull(progress.read(descriptor)))
                 progress.write(descriptor, StreamRecords.encode(stream.copy(head = progress.version)))
-                val state = TtlRecords.state(checkNotNull(progress.read(ttlKey)))
-                progress.write(ttlKey, TtlRecords.encode(state.copy(cursor = "progress")))
+                progress.write(progressKey, BackfillRecords.encode(BackfillProgress("progress")))
             }
             // This executes the same snapshot loader and native commit used by cache acquisition.
             assertEquals(1, tx.validation().guards.size)
@@ -275,6 +278,7 @@ class CatalogCacheIntegrationTest {
                 progress.write(descriptor, null)
                 progress.write(StreamRecords.config(table.id), null)
                 progress.write(ttlKey, null)
+                progress.write(progressKey, null)
             }
         }
 

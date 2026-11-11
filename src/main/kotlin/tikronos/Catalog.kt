@@ -43,7 +43,8 @@ internal class Catalog(private val db: Storage) {
             if (current?.id != table.id) throw ApiError("ResourceNotFoundException", "Table no longer exists")
             val changed = (current.tags + additions) - removals
             if (changed.size > MAX_TAGS) invalid("Too many tags")
-            tx.write(Storage.CATALOG + name, Records.encodeTable(current.copy(tags = changed)))
+            if (changed != current.tags)
+                tx.write(Storage.CATALOG + name, Records.encodeTable(current.copy(tags = changed)))
         }
     }
 }

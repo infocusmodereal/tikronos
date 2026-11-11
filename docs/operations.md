@@ -20,7 +20,7 @@ Renewal and schema changes conflict through native TiKV transactions. A schema w
 renewal and waits for existing leases to expire before committing; schema changes can therefore
 add approximately one second of latency. Abandoned renewal blocks expire after ten seconds.
 Requests outside a cached definition's timestamp interval read TiKV instead of using stale metadata.
-Tables with an index being backfilled bypass caching because their checkpoints change frequently.
+Tables with an index being backfilled also use the cache; progress is stored separately from the definition.
 
 [TiKV MVCC](https://tikv.org/deep-dive/distributed-transaction/isolation-level/) supplies snapshot reads and write conflicts. The cache still needs coordination: snapshot
 isolation alone does not invalidate process memory or validate arbitrary read dependencies.
@@ -33,7 +33,28 @@ validation; actual stream-head and cursor writes retain native write conflicts.
 The cache excludes worker cursors and mutable stream heads. Unconditional Put/Delete operations
 skip the previous-item read when indexes, TTL, Streams, return values and capacity reporting do
 not require it; TiKV still checks write conflicts.
-The same storage gate covers API schema changes, tags, index checkpoints, and deletion/recreation.
+The same storage gate covers API schema changes, changed tags, index activation, and deletion/recreation.
+Tag requests that leave the tag set unchanged do not rewrite the catalog.
+
+## Maintenance checkpoints
+
+Index and TTL backfill progress lives under `tikronos/v1/backfill/`, scoped to table and index
+IDs or TTL policy generation. Each batch discovers at most 32 item keys, then rechecks current
+items, metadata and expected progress in a TiKV transaction, using native batch reads. Index
+batches also target at most 1 MiB of encoded entry values; one larger entry can exceed that
+target to ensure progress. A byte-limited batch resumes at its last processed key, even on a
+short scan. The same commit writes the derived entries and advances the checkpoint. The final
+index batch publishes `ACTIVE` and removes its checkpoint atomically. TTL keeps an explicit
+completed checkpoint; configuration discovery and batched progress reads share one snapshot per
+page. Concurrent workers use native write conflicts; an aborted batch cannot advance progress.
+Checkpoint writes do not rewrite semantic metadata, drain catalog leases or fan out metadata
+fences. Activation and policy changes still do.
+
+When a separate checkpoint is absent, workers resume the embedded cursor in older records. That
+embedded cursor remains a legacy seed, not a live progress report. New policy generations and
+recreated tables/indexes use independent keys. Retired checkpoints, like retired data
+namespaces, are not physically reclaimed yet. Follow the stop-all-instances and backup/restore
+upgrade policy below; mixed old/new workers and in-place rollback are unsupported.
 
 ## Range reads
 
@@ -110,7 +131,7 @@ and `unknown_outcome`. The latter is an ambiguous write result, not a safe rejec
 
 The `tikronos.CatalogLease` event measures complete acquisition and drain calls, including
 transaction retries. Acquisition triggers distinguish `cold`, `expired` and `renewal`; outcomes
-distinguish durable lease `extended` or `reused` from `missing`, `creating`, `blocked` and `error`.
+distinguish durable lease `extended` or `reused` from `missing`, `blocked` and `error`.
 A completed drain reports `drained`. `attempts` counts transaction attempts and
 `leaseWriteAttempts` counts write intents across retries, not successful commits or native RPCs.
 Drain `polls` includes the terminal PD timestamp check; `waitNanos` includes polling and sleep.
