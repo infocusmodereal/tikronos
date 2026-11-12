@@ -2,7 +2,6 @@ package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Executor
 import kotlinx.coroutines.sync.Semaphore
 import tikronos.diagnostics.RequestEvents
 import tikronos.model.CapacityUnits
@@ -60,12 +59,24 @@ internal fun executeBatch(
 /** Join both durable decisions, even on interruption or failure. Only the caller builds the response. */
 private fun <T> runPair(first: () -> T, second: () -> T): Pair<T, T> {
     val phases = RequestEvents.child()
-    val future = CompletableFuture.supplyAsync({ runCatching { RequestEvents.within(phases, second) } }, virtual)
+    val future = CompletableFuture<Result<T>>()
+    val thread = Thread.startVirtualThread {
+        future.complete(runCatching { RequestEvents.within(phases, second) })
+    }
     val caller = runCatching(first)
-    val helper = future.join()
+    if (caller.exceptionOrNull() is InterruptedException) Thread.currentThread().interrupt()
+    var interrupted: InterruptedException? = null
+    val helper = try {
+        if (Thread.interrupted()) throw InterruptedException("Batch write interrupted")
+        future.get()
+    } catch (stop: InterruptedException) {
+        interrupted = stop
+        thread.interrupt()
+        try { future.join() } finally { Thread.currentThread().interrupt() }
+    }
     RequestEvents.include(phases)
     // An unknown outcome takes precedence over a concurrent, otherwise reportable client error.
-    val errors = listOfNotNull(caller.exceptionOrNull(), helper.exceptionOrNull())
+    val errors = listOfNotNull(caller.exceptionOrNull(), helper.exceptionOrNull(), interrupted)
     if (errors.isNotEmpty()) {
         val primary = errors.firstOrNull { it is CommitUnknown } ?: errors.first()
         errors.filter { it !== primary }.forEach(primary::addSuppressed)
@@ -73,6 +84,3 @@ private fun <T> runPair(first: () -> T, second: () -> T): Pair<T, T> {
     }
     return caller.getOrThrow() to helper.getOrThrow()
 }
-
-// Helpers never queue behind a parent occupying the storage dispatcher.
-private val virtual = Executor { task -> Thread.startVirtualThread(task) }

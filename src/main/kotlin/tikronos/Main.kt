@@ -134,15 +134,26 @@ private fun closeResources(
 ) {
     workers.shutdown()
     try {
-        if (!workers.awaitTermination(DRAIN_MS, TimeUnit.MILLISECONDS)) workers.shutdownNow()
+        if (!workers.awaitTermination(DRAIN_MS, TimeUnit.MILLISECONDS)) {
+            workers.shutdownNow()
+            workers.awaitTermination(DRAIN_MS, TimeUnit.MILLISECONDS)
+        }
     } finally {
-        workers.close() // A running commit and its joined helper still own the TiKV session.
-        try {
-            maintenance.close()
-        } finally {
-            dispatcher.close()
-            cleanup.close()
-            try { storage.close() } finally { session.close() }
+        fun release() {
+            try {
+                maintenance.close()
+            } finally {
+                dispatcher.close()
+                cleanup.close()
+                try { storage.close() } finally { session.close() }
+            }
+        }
+        if (workers.isTerminated) release() else {
+            java.util.logging.Logger.getLogger("tikronos").warning("Storage drain timed out; deferring session close")
+            Thread.ofPlatform().daemon().name("storage-drain").start {
+                workers.close()
+                release()
+            }
         }
     }
 }

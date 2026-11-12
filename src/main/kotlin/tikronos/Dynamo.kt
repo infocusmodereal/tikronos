@@ -1,9 +1,7 @@
 package tikronos
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
-import kotlin.coroutines.coroutineContext
 import tikronos.protocol.Signature
 
 import tikronos.diagnostics.RequestEvents
@@ -35,10 +33,10 @@ internal class Dynamo(db: Storage, private val signature: Signature?, executions
     @Suppress(
         "TooGenericExceptionCaught"
     ) // HTTP boundary: log unexpected failures and return an SDK-readable error.
-    suspend fun handle(input: DynamoRequest): DynamoResponse {
+    fun handle(input: DynamoRequest, checkActive: () -> Unit): DynamoResponse {
         val response =
             try {
-                HttpURLConnection.HTTP_OK to request(input)
+                HttpURLConnection.HTTP_OK to request(input, checkActive)
             } catch (e: ConditionFailed) {
                 HttpURLConnection.HTTP_BAD_REQUEST to
                     obj(
@@ -76,7 +74,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?, executions
             obj("__type" to "InternalServerError", "message" to "Storage request failed")
     }
 
-    private suspend fun request(input: DynamoRequest): ObjectNode {
+    private fun request(input: DynamoRequest, checkActive: () -> Unit): ObjectNode {
         if (input.hasQuery) invalid("Unexpected query parameters")
         val body = input.body
         if (body.size > MAX_BODY) {
@@ -101,7 +99,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?, executions
             }
         val operation = target.removePrefix(prefix)
         return if (prefix == STREAM_PREFIX) dispatchStream(operation, req)
-        else dispatch(operation, req, input)
+        else dispatch(operation, req, input, checkActive)
     }
 
     private fun dispatchStream(operation: String, req: ObjectNode): ObjectNode = when (operation) {
@@ -112,7 +110,9 @@ internal class Dynamo(db: Storage, private val signature: Signature?, executions
         else -> unknown()
     }
 
-    private suspend fun dispatch(operation: String, req: ObjectNode, input: DynamoRequest): ObjectNode =
+    private fun dispatch(
+        operation: String, req: ObjectNode, input: DynamoRequest, checkActive: () -> Unit,
+    ): ObjectNode =
         when (operation) {
             "DescribeEndpoints" -> {
                 req.fieldsOnly()
@@ -131,7 +131,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?, executions
             "Query",
             "Scan" -> reads.read(req, operation == "Query")
             "BatchGetItem" -> batches.get(req)
-            "BatchWriteItem" -> batches.write(req, coroutineContext::ensureActive)
+            "BatchWriteItem" -> batches.write(req, checkActive)
             "GetItem" -> items.get(req)
             "PutItem",
             "DeleteItem",

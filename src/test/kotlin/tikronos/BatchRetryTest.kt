@@ -1,5 +1,6 @@
 package tikronos
 
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -26,17 +27,21 @@ class BatchRetryTest {
         }
         val committed = mutableListOf<String>()
         val result =
-            executeBatch(writes, Capacity(obj())) {
+            executeBatch(writes, Capacity(obj("ReturnConsumedCapacity" to "TOTAL")), Semaphore(1)) {
                 if (it.address == "b") throw ContentionLimitExceeded()
                 committed += it.address
                 WriteResult(table, null, null)
             }
+        assertEquals(2.0, result["ConsumedCapacity"].single()["CapacityUnits"].doubleValue())
         val retry = result["UnprocessedItems"]["Locks"].single()
         executeBatch(writes.filter { it.request == retry }, Capacity(obj())) {
             committed += it.address
             WriteResult(table, null, null)
         }
         assertEquals(listOf("a", "c", "b"), committed)
+        assertFailsWith<ContentionLimitExceeded> {
+            executeBatch(writes, Capacity(obj()), Semaphore(1)) { throw ContentionLimitExceeded() }
+        }
     }
 
     @Test
@@ -58,18 +63,51 @@ class BatchRetryTest {
     fun `concurrent unknown decision takes precedence over a client error and stops later writes`() {
         val table = Table("Locks", "id", "pk", 0, null)
         val writes = listOf("a", "b", "c").map { BatchWrite(table, it, obj(), null, emptyMap()) }
-        val rendezvous = CyclicBarrier(2)
-        val spare = Semaphore(1)
-        val failure = assertFailsWith<CommitUnknown> {
-            executeBatch(writes, Capacity(obj()), spare) { op ->
-                check(op.address != "c") { "Started another operation after a fatal error" }
-                rendezvous.await(5, TimeUnit.SECONDS)
-                if (op.address == "a") invalid("Concurrent schema change")
-                throw CommitUnknown(IllegalStateException("Lost reply"))
+        for (unknown in listOf("a", "b")) {
+            val rendezvous = CyclicBarrier(2)
+            val spare = Semaphore(1)
+            val failure = assertFailsWith<CommitUnknown> {
+                executeBatch(writes, Capacity(obj()), spare) { op ->
+                    check(op.address != "c") { "Started another operation after a fatal error" }
+                    rendezvous.await(5, TimeUnit.SECONDS)
+                    if (op.address == unknown) throw CommitUnknown(IllegalStateException("Lost reply"))
+                    invalid("Concurrent schema change")
+                }
             }
+            assertEquals("Concurrent schema change", failure.suppressed.single().message)
+            assertEquals(1, spare.availablePermits)
         }
-        assertEquals("Concurrent schema change", failure.suppressed.single().message)
-        assertEquals(1, spare.availablePermits)
+    }
+
+    @Test
+    fun `forced shutdown interrupts and drains a blocked helper without hiding its unknown outcome`() {
+        val table = Table("Locks", "id", "pk", 0, null)
+        val writes = listOf("a", "b", "c").map { BatchWrite(table, it, obj(), null, emptyMap()) }
+        val entered = CountDownLatch(1)
+        val spare = Semaphore(1)
+        try {
+            assertFailsWith<CommitUnknown> {
+                executeBatch(writes, Capacity(obj()), spare) { op ->
+                    if (op.address == "a") {
+                        check(entered.await(5, TimeUnit.SECONDS))
+                        Thread.currentThread().interrupt()
+                    } else {
+                        check(op.address == "b")
+                        entered.countDown()
+                        try {
+                            check(CountDownLatch(1).await(5, TimeUnit.SECONDS)) { "Helper was not interrupted" }
+                        } catch (stop: InterruptedException) {
+                            throw CommitUnknown(stop)
+                        }
+                    }
+                    WriteResult(table, null, null)
+                }
+            }
+            assertEquals(true, Thread.currentThread().isInterrupted)
+            assertEquals(1, spare.availablePermits)
+        } finally {
+            Thread.interrupted()
+        }
     }
 
     @Test
