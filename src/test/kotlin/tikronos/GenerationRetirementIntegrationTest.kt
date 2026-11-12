@@ -128,6 +128,7 @@ class GenerationRetirementIntegrationTest {
                     tx.write(StreamRecords.descriptor(later.arn), null)
                 }
                 Tables(db).delete(obj("TableName" to table.name))
+                assertNull(db.read(db.snapshot(), StreamRecords.config(table.id)))
             }
         }
 

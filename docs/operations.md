@@ -63,7 +63,7 @@ commits the next key with the deletions. Readers on an older valid TiKV snapshot
 view until normal TiKV GC. Reusing a name does not reuse its keys. Index and TTL checkpoints
 are removed when their generations retire. Previously orphaned rows and checkpoints without a
 retirement marker are not swept. Per-generation configuration stripes are queued with the rows;
-catalog stripes remain reusable by name. A worker rotates through jobs until its 150 ms scheduling
+catalog stripes remain reusable by name, so each distinct table name retains 1,024 stripe keys. A worker rotates through jobs until its 150 ms scheduling
 budget expires (an in-flight transaction can exceed the budget). TTL candidates remain until their
 scheduled expiry, even after retirement; a far-future timestamp can keep a candidate for years. Follow the stop-all-instances and backup/restore
 upgrade policy below; mixed old/new workers and in-place rollback are unsupported.

@@ -75,7 +75,8 @@ internal class Tables(private val db: Storage) {
             val closed = streams.disable(tx, current)
             RetiredRows.enqueue(tx, current)
             current.indexes.forEach { RetiredRows.retireIndex(tx, current, it) }
-            if (closed != null) RetiredRows.retireConfig(tx, StreamRecords.config(current.id))
+            val config = StreamRecords.config(current.id)
+            if (tx.read(config) != null) RetiredRows.retireConfig(tx, config)
             tx.read(TtlRecords.config(current.id))?.let {
                 tx.write(BackfillRecords.ttl(TtlRecords.state(it)), null)
                 RetiredRows.retireConfig(tx, TtlRecords.config(current.id))
