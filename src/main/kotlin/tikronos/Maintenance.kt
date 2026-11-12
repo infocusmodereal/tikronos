@@ -4,6 +4,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.logging.Level
 import java.util.logging.Logger
+import tikronos.diagnostics.MaintenanceEvent
 import tikronos.storage.Storage
 
 /** Durable cursors live in TiKV; any process may advance a bounded unit of work. */
@@ -17,12 +18,15 @@ internal class Maintenance(db: Storage) : AutoCloseable {
 
     fun start() {
         executor.scheduleWithFixedDelay({
-            maintenanceAttempt("index backfill") { indexes.tick() }
-            maintenanceAttempt("TTL") { ttl.tick(writer) }
-            maintenanceAttempt("retired generations") { retired.tick() }
-            maintenanceAttempt("stream retention") { streams.tick() }
+            visit("index backfill") { indexes.tick() }
+            visit("TTL") { ttl.tick(writer) }
+            visit("retired generations") { retired.tick() }
+            visit("stream retention") { streams.tick() }
         }, 0, 1, TimeUnit.SECONDS)
     }
+
+    private fun visit(family: String, work: () -> Unit) =
+        MaintenanceEvent.measure(family) { maintenanceAttempt(family, work) }
 
     override fun close() {
         executor.shutdown()

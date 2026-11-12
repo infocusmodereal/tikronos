@@ -1,5 +1,9 @@
 package tikronos
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Semaphore
+import kotlin.coroutines.coroutineContext
 import tikronos.protocol.Signature
 
 import tikronos.diagnostics.RequestEvents
@@ -17,21 +21,21 @@ import tikronos.storage.CommitUnknown
 import tikronos.storage.ContentionLimitExceeded
 import tikronos.storage.Storage
 
-internal class Dynamo(db: Storage, private val signature: Signature?) {
+internal class Dynamo(db: Storage, private val signature: Signature?, executions: Semaphore) {
     private val tables = Tables(db)
     private val catalog = Catalog(db)
     private val streams = StreamReads(db)
     private val ttl = Ttl(db)
     private val items = Items(db, tables)
     private val reads = Reads(db, tables)
-    private val batches = Batches(db, tables)
+    private val batches = Batches(db, tables, executions)
 
     fun validateHeaders(headers: RequestHeaders) = signature?.validateHeaders(headers)
 
     @Suppress(
         "TooGenericExceptionCaught"
     ) // HTTP boundary: log unexpected failures and return an SDK-readable error.
-    fun handle(input: DynamoRequest): DynamoResponse {
+    suspend fun handle(input: DynamoRequest): DynamoResponse {
         val response =
             try {
                 HttpURLConnection.HTTP_OK to request(input)
@@ -56,6 +60,8 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
             } catch (e: CommitUnknown) {
                 RequestEvents.rejection("unknown_outcome")
                 storageFailure(e)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 storageFailure(e)
             }
@@ -70,7 +76,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
             obj("__type" to "InternalServerError", "message" to "Storage request failed")
     }
 
-    private fun request(input: DynamoRequest): ObjectNode {
+    private suspend fun request(input: DynamoRequest): ObjectNode {
         if (input.hasQuery) invalid("Unexpected query parameters")
         val body = input.body
         if (body.size > MAX_BODY) {
@@ -106,7 +112,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
         else -> unknown()
     }
 
-    private fun dispatch(operation: String, req: ObjectNode, input: DynamoRequest): ObjectNode =
+    private suspend fun dispatch(operation: String, req: ObjectNode, input: DynamoRequest): ObjectNode =
         when (operation) {
             "DescribeEndpoints" -> {
                 req.fieldsOnly()
@@ -125,7 +131,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?) {
             "Query",
             "Scan" -> reads.read(req, operation == "Query")
             "BatchGetItem" -> batches.get(req)
-            "BatchWriteItem" -> batches.write(req)
+            "BatchWriteItem" -> batches.write(req, coroutineContext::ensureActive)
             "GetItem" -> items.get(req)
             "PutItem",
             "DeleteItem",

@@ -31,9 +31,9 @@ internal class HttpApi(
     private val api: Dynamo,
     private val storage: CoroutineDispatcher,
     private val limits: HttpLimits,
+    private val executions: Semaphore,
 ) {
     private val slots = Semaphore(limits.maxRequests)
-    private val executions = Semaphore(limits.storageWorkers)
     private val bodies = RequestBodies()
     @Volatile private var draining = false
 

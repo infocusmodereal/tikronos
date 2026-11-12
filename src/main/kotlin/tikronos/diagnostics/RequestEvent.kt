@@ -27,6 +27,7 @@ internal class RequestEvent : Event() {
     @JvmField var catalogDrains = 0
     @JvmField var catalogFallbackGets = 0
     @JvmField var catalogLoaderBusy = 0
+    @JvmField var batchPairs = 0
     @JvmField var timestamps = 0
     @JvmField var prewrites = 0
     @JvmField var commits = 0

@@ -1,5 +1,8 @@
 package tikronos
 
+import kotlinx.coroutines.sync.Semaphore
+import tikronos.diagnostics.RequestEvent
+import tikronos.diagnostics.RequestEvents
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -74,6 +77,27 @@ class BatchesIntegrationTest {
             Batches(db, Tables(db)).write(request)
         }.code)
         assertEquals(null, db.read(db.snapshot(), table.address(valid)))
+    }
+
+    @Test
+    fun `independent commits share storage admission and account both successful items`() = fixture { db, table ->
+        val items = (1..2).map { mapOf("pk" to Value.text("p"), "sk" to Value.text(it.toString())) }
+        val commands = items.map { obj("PutRequest" to obj("Item" to wireItem(it))) }
+        val req = obj("RequestItems" to obj(table.name to commands), "ReturnConsumedCapacity" to "TOTAL")
+        val tables = Tables(db)
+        tables.find(table.name) // Populate the existing write-plan lease.
+        val spare = Semaphore(1)
+        val batches = Batches(db, tables, spare)
+        for (parallel in listOf(true, false)) {
+            if (!parallel) check(spare.tryAcquire())
+            val event = RequestEvent()
+            val result = RequestEvents.within(event) { batches.write(req) }
+            assertEquals(if (parallel) 1 else 0, event.batchPairs)
+            assertTrue(result["UnprocessedItems"].isEmpty)
+            assertEquals(2.0, result["ConsumedCapacity"].single()["CapacityUnits"].doubleValue())
+            if (!parallel) spare.release()
+        }
+        items.forEach { assertEquals(it, Records.item(checkNotNull(db.read(db.snapshot(), table.address(it))))) }
     }
 
     private fun row(partition: String, sort: Int): Item = mapOf(

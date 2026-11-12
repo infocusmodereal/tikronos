@@ -9,13 +9,11 @@ import tikronos.expression.RequestExpressions
 import tikronos.expression.project
 import tikronos.model.Item
 import tikronos.protocol.BatchWrite
-import tikronos.model.WriteResult
+import kotlinx.coroutines.sync.Semaphore
 import tikronos.model.WriteIntent
-import tikronos.model.CapacityUnits
 import tikronos.model.Table
 import tikronos.model.Value
 import tikronos.model.itemSize
-import tikronos.storage.ContentionLimitExceeded
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.address
@@ -23,7 +21,7 @@ import tikronos.storage.key
 import tikronos.storage.entry
 import tikronos.storage.readBatch
 
-internal class Batches(private val db: Storage, private val tables: Tables) {
+internal class Batches(private val db: Storage, private val tables: Tables, private val executions: Semaphore? = null) {
     private val writer = ItemWriter(db)
 
     fun get(req: ObjectNode): ObjectNode {
@@ -100,7 +98,7 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
         }
     }
 
-    fun write(req: ObjectNode): ObjectNode {
+    fun write(req: ObjectNode, checkActive: () -> Unit = {}): ObjectNode {
         req.fieldsOnly("RequestItems", "ReturnConsumedCapacity", "ReturnItemCollectionMetrics")
         if (
             req.has("ReturnItemCollectionMetrics") &&
@@ -109,9 +107,14 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
             invalid("Invalid ReturnItemCollectionMetrics")
         }
         val capacity = Capacity(req)
+        val snapshot = db.snapshot()
+        var spare = executions
         val operations =
             requests(req).flatMap { (name, entries) ->
-                val table = tables.find(name)
+                val table = tables.find(name, snapshot)
+                // Scheduling hint only. Each commit validates the current table generation and write plan.
+                val plan = db.catalog.cached(Storage.CATALOG + name, snapshot.version)?.plan
+                if (plan == null || plan.streamArn != null || table.indexes.any { it.status != "ACTIVE" }) spare = null
                 if (!entries.isArray || entries.isEmpty || entries.size() > MAX_BATCH_WRITE)
                     invalid("Invalid write request list length")
                 entries.map {
@@ -126,7 +129,7 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
                 "BatchWriteItem keys contain duplicates or exceed the maximum list length of $MAX_BATCH_WRITE"
             )
         }
-        return executeBatch(operations, capacity) { op ->
+        return executeBatch(operations, capacity, spare, checkActive) { op ->
             val intent = WriteIntent.select(true, capacity.requested, op.item) { op.item }
             writer.mutate(op.table, op.key, intent)
         }
@@ -170,25 +173,3 @@ internal class Batches(private val db: Storage, private val tables: Tables) {
 
 private const val MAX_BATCH_GET = 100
 private const val MAX_BATCH_WRITE = 100
-
-internal fun executeBatch(
-    operations: List<BatchWrite>,
-    capacity: Capacity,
-    commit: (BatchWrite) -> WriteResult,
-): ObjectNode {
-    val unprocessed = obj()
-    val units = mutableMapOf<String, CapacityUnits>()
-    var completed = 0
-    for (op in operations) {
-        try {
-            val result = commit(op)
-            completed++
-            if (capacity.requested)
-                units.merge(op.table.name, writeCapacity(result.table, result.old, result.new), CapacityUnits::plus)
-        } catch (_: ContentionLimitExceeded) {
-            unprocessed.withArray(op.table.name).add(op.request)
-        }
-    }
-    if (completed == 0) throw ContentionLimitExceeded()
-    return obj("UnprocessedItems" to unprocessed).also { capacity.batchUsage(it, units) }
-}
