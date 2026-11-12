@@ -42,14 +42,14 @@ internal class StreamRetention(private val db: Storage) {
     }
 
     private fun finishClosed(state: StreamState) {
-        db.atomic { tx ->
+        db.uncachedAtomic { tx ->
             val descriptor = StreamRecords.descriptor(state.arn)
             val config = StreamRecords.config(state.tableId)
             if (tx.read(descriptor) != null) {
                 if (tx.read(config)?.decodeToString() == state.arn) {
                     // DescribeTable still exposes the latest disabled stream of a live generation.
-                    if (tx.table(state.tableName)?.id == state.tableId) return@atomic
-                    tx.write(config, null)
+                    if (tx.table(state.tableName)?.id == state.tableId) return@uncachedAtomic
+                    RetiredRows.retireConfig(tx, config)
                 }
                 tx.write(descriptor, null)
                 tx.write(StreamRecords.trimKey(state.arn), null)

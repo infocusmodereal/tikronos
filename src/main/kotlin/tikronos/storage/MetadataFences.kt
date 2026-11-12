@@ -14,21 +14,23 @@ internal object MetadataFences {
 
     fun isFence(key: String): Boolean = key.startsWith(PREFIX)
 
+    fun isFenceNamespace(prefix: String) = isFence(prefix) && prefix != PREFIX && prefix.endsWith('/')
+
     fun tracks(key: String): Boolean =
         key.startsWith(Storage.CATALOG) ||
             key.startsWith(TtlRecords.CONFIGS) ||
             key.startsWith(StreamRecords.CONFIGS)
 
+    fun namespace(key: String) = PREFIX + keyDigest(key) + "/"
+
     fun keys(key: String): List<String> {
-        val prefix = PREFIX + keyDigest(key) + "/"
+        val prefix = namespace(key)
         return List(STRIPES) { prefix + it.toString(HEX_RADIX).padStart(HEX_WIDTH, '0') }
     }
 
     fun guard(key: String, scope: String): String =
         if (tracks(key))
-            PREFIX +
-                keyDigest(key) +
-                "/" +
+            namespace(key) +
                 (scope.hashCode() and (STRIPES - 1)).toString(HEX_RADIX).padStart(HEX_WIDTH, '0')
         else key
 }

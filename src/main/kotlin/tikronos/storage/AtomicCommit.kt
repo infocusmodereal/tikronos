@@ -124,7 +124,8 @@ internal class AtomicCommit(
         onePhase: OnePhaseBounds?,
     ): Long {
         var committed = 0L
-        val blindFences = values.keys.filter(MetadataFences::isFence).map(::bytes).toSet()
+        val blindFences = values.asSequence().filter { (key, value) -> value != null && MetadataFences.isFence(key) }
+            .map { bytes(it.key) }.toSet()
         RegionBatches(session).execute(
             mutations.keys.toList(),
             size = { mutations.getValue(it).serializedSize },

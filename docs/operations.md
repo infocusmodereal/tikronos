@@ -58,11 +58,14 @@ fences. Activation and policy changes still do.
 When a separate checkpoint is absent, workers resume the embedded cursor in older records. That
 embedded cursor remains a legacy seed, not a live progress report. New policy generations and
 recreated tables/indexes use independent keys. Dropping a table or index queues its immutable row prefix in the DDL
-transaction. Maintenance deletes up to 64 keys per job per tick using MVCC tombstones and
+transaction. Maintenance deletes up to 512 keys per transaction using MVCC tombstones and
 commits the next key with the deletions. Readers on an older valid TiKV snapshot retain their
 view until normal TiKV GC. Reusing a name does not reuse its keys. Index and TTL checkpoints
 are removed when their generations retire. Previously orphaned rows and checkpoints without a
-retirement marker are not swept. Metadata validation stripes are retained. TTL candidates remain in expiry order for the normal TTL worker. Follow the stop-all-instances and backup/restore
+retirement marker are not swept. Per-generation configuration stripes are queued with the rows;
+catalog stripes remain reusable by name. A worker rotates through jobs until its 150 ms scheduling
+budget expires (an in-flight transaction can exceed the budget). TTL candidates remain until their
+scheduled expiry, even after retirement; a far-future timestamp can keep a candidate for years. Follow the stop-all-instances and backup/restore
 upgrade policy below; mixed old/new workers and in-place rollback are unsupported.
 
 ## Stream retention

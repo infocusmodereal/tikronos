@@ -12,6 +12,7 @@ import tikronos.model.Value
 import tikronos.storage.shard
 import tikronos.model.Table
 import tikronos.storage.BackfillRecords
+import tikronos.storage.MetadataFences
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.StreamRecords
@@ -22,6 +23,16 @@ import tikronos.storage.schema
 class GenerationRetirementIntegrationTest {
     private fun id() = UUID.randomUUID().toString()
 
+    private fun drain(db: Storage, keys: List<String>) {
+        val worker = RetiredRows(db)
+        repeat(200) {
+            val snapshot = db.snapshot()
+            if (keys.all { db.read(snapshot, it) == null }) return
+            worker.tick()
+        }
+        error("Cleanup did not finish")
+    }
+
     @Test
     fun `restart after one batch and stale worker cannot erase a recreated generation or snapshot`() =
         withStorageSession { _, db ->
@@ -29,7 +40,7 @@ class GenerationRetirementIntegrationTest {
             val table = Table("rows-" + id(), id(), "pk", 1L, null, indexes = listOf(index))
             val next = table.copy(id = id(), indexes = listOf(index.copy(id = id())))
             val marker = byteArrayOf(1)
-            val oldRows = (100..170).map { table.prefix() + it }
+            val oldRows = (1000..1520).map { table.prefix() + it }
             val indexRow = index.schema(table).prefix() + "entry"
             db.atomic { tx ->
                 tx.write(Storage.CATALOG + table.name, Records.encodeTable(table))
@@ -57,21 +68,20 @@ class GenerationRetirementIntegrationTest {
                 tx.write(Storage.CATALOG + table.name, Records.encodeTable(next))
                 tx.write(newRow, marker)
                 tx.write(newEntry, marker)
+                Streams(db).configure(tx, next, obj("StreamEnabled" to true, "StreamViewType" to "KEYS_ONLY"))
             }
-            val job = RetiredRows.JOBS + table.id
+            val job = RetiredRows.jobKey(table.prefix())
             RetiredRows(db).advance(job, table.prefix())
             val resume = assertNotNull(db.read(db.snapshot(), job)).decodeToString()
             check(resume > table.prefix())
             RetiredRows(db).advance(job, table.prefix())
             assertEquals(resume, db.read(db.snapshot(), job)?.decodeToString())
-            val worker = RetiredRows(db)
-            var remaining = 200
-            while (remaining-- > 0) {
-                if (db.read(db.snapshot(), job) == null && db.read(db.snapshot(), indexRow) == null) break
-                worker.tick()
-            }
+            val stripe = MetadataFences.keys(StreamRecords.config(table.id)).first()
+            assertNotNull(db.read(before, stripe))
+            drain(db, listOf(job, indexRow, stripe))
             val now = db.snapshot()
             assertNull(db.read(now, job))
+            assertNull(db.read(now, stripe))
             assertNull(db.read(now, indexRow))
             assertNull(db.read(now, BackfillRecords.index(table, index)))
             for (key in oldRows) {
@@ -81,6 +91,7 @@ class GenerationRetirementIntegrationTest {
             assertNotNull(db.read(before, indexRow))
             assertNotNull(db.read(now, newRow))
             assertNotNull(db.read(now, newEntry))
+            assertNotNull(db.read(now, MetadataFences.keys(StreamRecords.config(next.id)).first()))
             assertEquals("INSERT", reads.records(iterator)["Records"].single()["eventName"].asText())
         }
 
@@ -95,10 +106,12 @@ class GenerationRetirementIntegrationTest {
                 checkNotNull(streams.configure(tx, table, spec))
             }
             val later = state.copy(arn = state.arn.replaceBefore(":000000000000", "arn:aws:dynamodb:zz-1"))
-            val unrelated = StreamRecords.descriptor(state.arn.replace("/${table.name}/", "/${table.name}-extra/"))
+            val other = state.copy(arn = state.arn.replace("/${table.name}/", "/${table.name}-extra/"),
+                tableName = table.name + "-extra")
+            val unrelated = StreamRecords.descriptor(other.arn)
             db.atomic { tx ->
                 tx.write(StreamRecords.descriptor(later.arn), StreamRecords.encode(later))
-                tx.write(unrelated, byteArrayOf(1))
+                tx.write(unrelated, StreamRecords.encode(other))
             }
             try {
                 val req = obj("TableName" to table.name, "Limit" to 1)
@@ -110,7 +123,11 @@ class GenerationRetirementIntegrationTest {
                 assertEquals(later.arn, last["Streams"].single()["StreamArn"].asText())
                 assertNull(last["LastEvaluatedStreamArn"])
             } finally {
-                db.atomic { it.write(unrelated, null) }
+                db.atomic { tx ->
+                    tx.write(unrelated, null)
+                    tx.write(StreamRecords.descriptor(later.arn), null)
+                }
+                Tables(db).delete(obj("TableName" to table.name))
             }
         }
 
