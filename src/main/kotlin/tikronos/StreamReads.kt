@@ -12,6 +12,7 @@ import tikronos.storage.shard
 import tikronos.storage.after
 import tikronos.storage.timestampStartOfSecond
 import tikronos.storage.bytes
+import tikronos.storage.readBatch
 import tikronos.storage.prefixEnd
 
 internal class StreamReads(private val db: Storage) {
@@ -103,7 +104,10 @@ internal class StreamReads(private val db: Storage) {
     }
 
     private fun find(arn: String, snapshot: Snapshot): StreamState {
-        val state = db.read(snapshot, StreamRecords.descriptor(arn))?.let(StreamRecords::decode)
+        val descriptor = StreamRecords.descriptor(arn)
+        val trimKey = StreamRecords.trimKey(arn)
+        val metadata = snapshot.readBatch(listOf(descriptor, trimKey))
+        val state = metadata[descriptor]?.let(StreamRecords::decode)
             ?.takeIf(::retained) ?: missingStream()
         // Enforce logical retention even if physical cleanup is behind. The sequence embeds PD time.
         val cutoff = timestampStartOfSecond(Instant.now().epochSecond - STREAM_RETENTION_SECONDS + 1)
@@ -111,7 +115,7 @@ internal class StreamReads(private val db: Storage) {
         val expired = db.ranges.scan(bytes(prefix), bytes(prefix + StreamRecords.sequence(cutoff)),
             false, snapshot, ScanOptions(limit = 1, keyOnly = true))
             .firstOrNull()?.key?.toStringUtf8()?.substringAfterLast('/')?.toLong() ?: 0
-        return state.copy(trimmed = maxOf(state.trimmed, expired))
+        return state.copy(trimmed = maxOf(StreamRecords.trimmed(state, metadata[trimKey]), expired))
     }
 
     private fun retained(state: StreamState) = state.closedAt == null ||
