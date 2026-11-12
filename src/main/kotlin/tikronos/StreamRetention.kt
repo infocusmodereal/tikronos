@@ -25,14 +25,36 @@ internal class StreamRetention(private val db: Storage) {
         }
     }
 
-    private fun prune(state: StreamState, cutoff: Long) {
+    internal fun prune(state: StreamState, cutoff: Long) {
         val events = StreamRecords.events(state)
-        val expired = db.ranges.scan(bytes(events), prefixEnd(events), true,
-            options = ScanOptions(limit = BATCH_SIZE)).takeWhile {
+        val rows = db.ranges.scan(bytes(events), prefixEnd(events), true,
+            options = ScanOptions(limit = BATCH_SIZE)).iterator()
+        if (!rows.hasNext()) {
+            // A closed generation cannot append. Finish only after its last event is gone.
+            if (state.closedAt != null && state.closedAt <= cutoff) finishClosed(state)
+            return
+        }
+        val expired = rows.asSequence().takeWhile {
                 json.readTree(it.value.toByteArray()).path("dynamodb")
                     .path("ApproximateCreationDateTime").longValue() <= cutoff
             }.map { it.key.toStringUtf8().substringAfterLast('/').toLong() }.toList()
         deleteBatch(state, expired)
+    }
+
+    private fun finishClosed(state: StreamState) {
+        db.atomic { tx ->
+            val descriptor = StreamRecords.descriptor(state.arn)
+            val config = StreamRecords.config(state.tableId)
+            if (tx.read(descriptor) != null) {
+                if (tx.read(config)?.decodeToString() == state.arn) {
+                    // DescribeTable still exposes the latest disabled stream of a live generation.
+                    if (tx.table(state.tableName)?.id == state.tableId) return@atomic
+                    tx.write(config, null)
+                }
+                tx.write(descriptor, null)
+                tx.write(StreamRecords.trimKey(state.arn), null)
+            }
+        }
     }
 
     /** A slower cleaner can submit an expired prefix after a newer batch has already committed. */
@@ -43,7 +65,9 @@ internal class StreamRetention(private val db: Storage) {
         val last = expired.last()
         db.atomic { tx ->
             // Competing cleaners serialize here. Events are immutable and their namespace is never reused.
-            if (last > StreamRecords.trimmed(state, tx.read(key))) {
+            val watermark = tx.read(key)
+            if (last > StreamRecords.trimmed(state, watermark) &&
+                (watermark != null || tx.read(prefix + StreamRecords.sequence(last)) != null)) {
                 expired.forEach { tx.write(prefix + StreamRecords.sequence(it), null) }
                 tx.write(key, StreamRecords.sequence(last).encodeToByteArray())
             }
