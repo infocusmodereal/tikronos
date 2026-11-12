@@ -33,7 +33,7 @@ Streams expose one shard per stream, four image modes, authenticated 15-minute i
 - Provisioned capacity is reported but not enforced. Backup status is DISABLED; no backup/restore API is implemented.
 - Transaction APIs, global tables and PartiQL are not implemented.
 - Cached table definitions use coordinated leases. Writes to the same item and an enabled stream head still contend; schema changes drain catalog leases. See [Operations](operations.md#table-catalog).
-- Deleting a table or index retires its namespace; physical reclamation is pending.
+- Deleting a table or index queues its rows for resumable MVCC deletion; disk reclamation follows TiKV GC.
 - An uncertain commit returns HTTP 500 `InternalServerError` and is recorded as `unknown_outcome` when request JFR events are enabled. Client retries may repeat an applied write; exactly-once execution is not provided. See [Write completion](operations.md#write-completion).
 
 The integration tests cover specific API, concurrency and recovery cases. Passing them does not establish complete DynamoDB parity or production readiness. See [Contributing](contributing.md#development-checks) for reproducible checks.

@@ -3,6 +3,7 @@ package tikronos
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.time.Instant
 import org.tikv.common.Snapshot
+import org.tikv.shade.com.google.protobuf.ByteString
 import tikronos.model.ScanOptions
 import tikronos.model.StreamPosition
 import tikronos.model.StreamState
@@ -11,6 +12,7 @@ import tikronos.storage.StreamRecords
 import tikronos.storage.shard
 import tikronos.storage.after
 import tikronos.storage.timestampStartOfSecond
+import tikronos.storage.byteOrder
 import tikronos.storage.bytes
 import tikronos.storage.readBatch
 import tikronos.storage.prefixEnd
@@ -23,17 +25,38 @@ internal class StreamReads(private val db: Storage) {
         val name = if (req.has("TableName")) Tables.tableName(req) else null
         val limit = req.integer("Limit", 1..MAX_STREAMS) ?: MAX_STREAMS
         val prefix = StreamRecords.PREFIX
-        val start = req.get("ExclusiveStartStreamArn")?.let { req.string("ExclusiveStartStreamArn") }
+        val start = req.get("ExclusiveStartStreamArn")?.let {
+            req.string("ExclusiveStartStreamArn").takeIf { arn -> arn.length in CURSOR_LENGTH }
+                ?: invalid("Invalid ExclusiveStartStreamArn")
+        }
         val first = if (start == null) bytes(prefix) else after(bytes(StreamRecords.descriptor(start)))
         val snap = db.snapshot()
-        val states = db.ranges.scan(first, prefixEnd(prefix), true, snap)
+        val rows = if (name == null) db.ranges.scan(first, prefixEnd(prefix), true, snap)
+            else tableDescriptors(name, first, snap)
+        val states = rows
             .map { StreamRecords.decode(it.value.toByteArray()) }
-            .filter { (name == null || it.tableName == name) && retained(it) }
+            .filter(::retained)
             .take(limit + 1).toList()
         return obj("Streams" to states.take(limit).map {
             obj("StreamArn" to it.arn, "TableName" to it.tableName, "StreamLabel" to it.label)
         }).apply { if (states.size > limit) put("LastEvaluatedStreamArn", states[limit - 1].arn) }
     }
+
+    // Seek once per ARN authority, including regions used before a configuration change.
+    private fun tableDescriptors(name: String, first: ByteString, snap: Snapshot) =
+        sequence {
+            val end = prefixEnd(StreamRecords.PREFIX)
+            var low = first
+            while (byteOrder.compare(low, end) < 0) {
+                val probe = db.ranges.scan(low, end, true, snap, ScanOptions(limit = 1, keyOnly = true))
+                    .firstOrNull() ?: break
+                val authority = probe.key.toStringUtf8().removePrefix(StreamRecords.PREFIX).substringBefore('/')
+                val group = StreamRecords.PREFIX + authority + "/"
+                val table = group + name + "/stream/"
+                yieldAll(db.ranges.scan(maxOf(low, bytes(table), byteOrder), prefixEnd(table), true, snap))
+                low = prefixEnd(group)
+            }
+        }
 
     fun describe(req: ObjectNode): ObjectNode {
         req.fieldsOnly("StreamArn", "Limit", "ExclusiveStartShardId")
@@ -125,6 +148,7 @@ internal class StreamReads(private val db: Storage) {
         StreamPosition(arn, position, Instant.now().epochSecond + ITERATOR_SECONDS))
 
     companion object {
+        private val CURSOR_LENGTH = 37..1024
         private const val MAX_STREAMS = 100
         private const val MAX_RECORDS = 1000
         private const val ITERATOR_SECONDS = 15 * 60L

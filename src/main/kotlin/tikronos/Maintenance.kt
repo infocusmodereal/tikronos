@@ -11,6 +11,7 @@ internal class Maintenance(db: Storage) : AutoCloseable {
     private val executor = Executors.newSingleThreadScheduledExecutor()
     private val indexes = IndexBackfill(db)
     private val ttl = TtlWorker(db, Ttl(db))
+    private val retired = RetiredRows(db)
     private val streams = StreamRetention(db)
     private val writer = ItemWriter(db)
 
@@ -18,6 +19,7 @@ internal class Maintenance(db: Storage) : AutoCloseable {
         executor.scheduleWithFixedDelay({
             maintenanceAttempt("index backfill") { indexes.tick() }
             maintenanceAttempt("TTL") { ttl.tick(writer) }
+            maintenanceAttempt("retired generations") { retired.tick() }
             maintenanceAttempt("stream retention") { streams.tick() }
         }, 0, 1, TimeUnit.SECONDS)
     }

@@ -5,6 +5,8 @@ import java.time.Instant
 import java.util.UUID
 import org.tikv.common.Snapshot
 import tikronos.model.Table
+import tikronos.storage.BackfillRecords
+import tikronos.storage.StreamRecords
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.table
@@ -71,7 +73,14 @@ internal class Tables(private val db: Storage) {
         val (table, stream) = db.atomic { tx ->
             val current = tx.table(name) ?: missing(name)
             val closed = streams.disable(tx, current)
-            tx.write(TtlRecords.config(current.id), null)
+            RetiredRows.enqueue(tx, current)
+            current.indexes.forEach { RetiredRows.retireIndex(tx, current, it) }
+            val config = StreamRecords.config(current.id)
+            if (tx.read(config) != null) RetiredRows.retireConfig(tx, config)
+            tx.read(TtlRecords.config(current.id))?.let {
+                tx.write(BackfillRecords.ttl(TtlRecords.state(it)), null)
+                RetiredRows.retireConfig(tx, TtlRecords.config(current.id))
+            }
             tx.write(Storage.CATALOG + name, null)
             current to closed
         }
@@ -86,6 +95,8 @@ internal class Tables(private val db: Storage) {
         val (table, stream) = db.atomic { tx ->
             val old = tx.table(name) ?: missing(name)
             val changed = updateCatalog(req, old)
+            old.indexes.filter { previous -> changed.indexes.none { it.id == previous.id } }
+                .forEach { RetiredRows.retireIndex(tx, old, it) }
             val state = if (req.has("StreamSpecification"))
                 streams.configure(tx, changed, req.obj("StreamSpecification")) else streams.current(tx, changed)
             tx.write(Storage.CATALOG + name, Records.encodeTable(changed))

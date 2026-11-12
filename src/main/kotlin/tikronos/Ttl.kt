@@ -11,6 +11,7 @@ import tikronos.model.TtlState
 import tikronos.model.TtlPolicy
 import tikronos.model.policy
 import tikronos.model.attributeName
+import tikronos.storage.BackfillRecords
 import tikronos.storage.Records
 import tikronos.storage.Storage
 import tikronos.storage.table
@@ -40,6 +41,7 @@ internal class Ttl(private val db: Storage) {
             val state = TtlState(name, table.id, attribute, enabled, UUID.randomUUID().toString())
             // Semantic TTL changes drain item writers' catalog leases; cursor progress does not.
             tx.write(Storage.CATALOG + name, Records.encodeTable(table))
+            old?.let { tx.write(BackfillRecords.ttl(it), null) }
             tx.write(TtlRecords.config(table.id), TtlRecords.encode(state))
         }
         return obj("TimeToLiveSpecification" to spec)
