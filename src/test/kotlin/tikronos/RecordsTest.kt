@@ -1,5 +1,10 @@
 package tikronos
 
+import kotlin.test.assertContentEquals
+import kotlin.test.assertFailsWith
+import tikronos.codec.parseItem
+import tikronos.model.MAX_DEPTH
+import tikronos.model.MAX_ITEM_BYTES
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import tikronos.model.Table
@@ -12,6 +17,35 @@ import tikronos.storage.byteOrder
 import tikronos.storage.segmentEdge
 
 class RecordsTest {
+    @Test
+    fun `typed records keep canonical wire bytes for all attribute types`() {
+        val source = """{"m":{"M":{"l":{"L":[{"S":"x"},{"N":"1E+2"},{"B":"YQ"},{"BOOL":false},{"NULL":true}]}}},""" +
+            """"ss":{"SS":["z","a"]},"ns":{"NS":["2.00","10"]},"bs":{"BS":["Yg","YQ"]}}"""
+        val canonical = """{"m":{"M":{"l":{"L":[{"S":"x"},{"N":"100"},{"B":"YQ=="},""" +
+            """{"BOOL":false},{"NULL":true}]}}},""" +
+            """"ss":{"SS":["a","z"]},"ns":{"NS":["10","2"]},"bs":{"BS":["YQ==","Yg=="]}}"""
+        val item = parseItem(json.readTree(source))
+        for (version in listOf(2, 3)) {
+            val bytes = byteArrayOf(version.toByte()) + canonical.encodeToByteArray()
+            assertContentEquals(bytes, Records.encodeItem(item, projectedIndexes = version == 3))
+            assertEquals(item, Records.item(bytes))
+        }
+        assertEquals(mapOf("pk" to Value.text("legacy")),
+            Records.item(byteArrayOf(1) + """{"pk":"legacy"}""".encodeToByteArray()))
+    }
+
+    @Test
+    fun `wire encoding round trips the largest supported depth and item size`() {
+        val nested = (1..MAX_DEPTH).fold(Value.text("x") as Value) { value, _ -> Value.list(listOf(value)) }
+        val largest = mapOf("x" to Value.text("v".repeat(MAX_ITEM_BYTES - 1)))
+        for (item in listOf(mapOf("x" to nested), largest)) {
+            validateItem(item)
+            assertEquals(item, Records.item(Records.encodeItem(item)))
+        }
+        assertFailsWith<ApiError> { validateItem(mapOf("x" to Value.list(listOf(nested)))) }
+        assertFailsWith<ApiError> { validateItem(largest + ("y" to Value.Null)) }
+    }
+
     @Test
     fun `existing lock and table retain identity after upgrading the storage format`() {
         val old = checkNotNull(javaClass.getResource("/legacy-table.json")).readBytes()
