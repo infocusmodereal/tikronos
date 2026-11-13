@@ -28,7 +28,7 @@ dependencies {
     implementation("org.tikv:tikv-client-java:3.3.5")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.22.4")
     testImplementation(kotlin("test-junit5"))
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 }
 
 tasks.test {
