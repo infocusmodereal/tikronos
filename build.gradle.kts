@@ -26,7 +26,7 @@ dependencies {
     implementation("io.ktor:ktor-server-netty:3.6.1")
     runtimeOnly("org.slf4j:slf4j-jdk14:2.0.19")
     implementation("org.tikv:tikv-client-java:3.3.5")
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.22.4")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.23.0")
     testImplementation(kotlin("test-junit5"))
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.12.2")
 }
