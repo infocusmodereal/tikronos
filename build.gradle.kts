@@ -24,7 +24,7 @@ distributions {
 
 dependencies {
     implementation("io.ktor:ktor-server-netty:3.6.1")
-    runtimeOnly("org.slf4j:slf4j-jdk14:2.0.19")
+    runtimeOnly("org.slf4j:slf4j-jdk14:2.0.20")
     implementation("org.tikv:tikv-client-java:3.3.5")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.22.4")
     testImplementation(kotlin("test-junit5"))
