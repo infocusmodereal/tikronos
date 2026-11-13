@@ -135,11 +135,15 @@ The raw-buffer budget does not include all parsed JSON or native allocations. Ad
 
 ## Write completion
 
-Single-item transactions without uncovered read dependencies use native TiKV one-phase commit
-(1PC). The request keeps native write-conflict checks, obtains a fresh timestamp before sending,
+A base-row write and its index puts/deletes can use native TiKV one-phase commit
+(1PC) when the complete transaction fits in one region request and has no uncovered read dependencies. The request keeps native write-conflict checks, obtains a fresh timestamp before sending,
 and bounds the commit timestamp by the catalog lease. A successful 1PC response is the durable
 commit decision; an explicit fallback continues through ordinary two-phase commit (2PC).
-Multi-key, metadata and index-entry transactions remain on 2PC. Set
+Transactions split across regions or request-size limits, metadata writes and index-only
+maintenance use 2PC. A region error after a multi-key 1PC attempt is reported as an unknown
+outcome because repartitioning would change the decision request. TiKV Async Commit remains
+disabled: recovering its primary requires checking its secondary locks after coordinator failure.
+The current service uses ordinary 2PC recovery and has no verified secondary-status recovery path. Set
 `TIKRONOS_ONE_PHASE_COMMIT=false` to disable 1PC without changing the stored format.
 
 A lost 1PC response or an uncertain 2PC primary commit is an unknown outcome. The API returns

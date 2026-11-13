@@ -45,16 +45,20 @@ internal class AtomicCommit(
             TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - started).coerceAtLeast(0)) +
                 LOCK_TTL_MS
         val mutations = mutations(entries, values, guards)
-        val bounds = onePhaseBounds(values, guards, start, ceiling)
-        if (bounds != null && bounds.minimum > bounds.maximum) return false
+        // Obtain a fresh PD lower bound only when routing yields the complete mutation set.
+        val bounds = if (eligible(values, guards)) lazy(LazyThreadSafetyMode.NONE) {
+            OnePhaseBounds(maxOf(start, timestamp().version) + 1, ceiling)
+        } else null
         try {
-            if (prewrite(mutations, values, primary, start, lockTtl, bounds) > 0) return true
+            val decision = prewrite(mutations, values, primary, start, lockTtl, bounds)
+            if (decision > 0) return true
+        } catch (_: ExpiredBeforePrewrite) {
+            return false
         } catch (unknown: CommitUnknown) {
             // A lost 1PC response may conceal a durable commit. No rollback or fresh replay.
             throw unknown
         } catch (error: Exception) {
-            // Region retries can exhaust their budget after a proposal may have applied.
-            if (bounds != null && !explicitKeyError(error)) throw CommitUnknown(error)
+            if (bounds?.isInitialized() == true && !explicitKeyError(error)) throw CommitUnknown(error)
             // Explicit key errors and ordinary 2PC prewrite failures have no commit decision.
             resolve(entries, start, 0)
             if (prewriteConflict(error)) return false
@@ -104,15 +108,14 @@ internal class AtomicCommit(
                 mutation.key to mutation
             }
 
-    private fun onePhaseBounds(
-        values: Map<String, ByteArray?>, guards: Set<String>, start: Long, ceiling: Long,
-    ): OnePhaseBounds? {
-        if (!onePhase || values.size != 1 || guards.isNotEmpty()) return null
-        // Match the upstream linearizable protocol; do not reuse a cached/lease timestamp.
-        val key = values.keys.single()
-        return if (key.startsWith(Storage.ITEM) && !key.startsWith("${Storage.ITEM}index/"))
-            OnePhaseBounds(maxOf(start, timestamp().version) + 1, ceiling) else null
+    private fun eligible(values: Map<String, ByteArray?>, guards: Set<String>): Boolean {
+        if (!onePhase || guards.isNotEmpty()) return false
+        val indexes = "${Storage.ITEM}index/"
+        return values.keys.all { it.startsWith(Storage.ITEM) } &&
+            values.keys.count { !it.startsWith(indexes) } == 1
     }
+
+    private class ExpiredBeforePrewrite : RuntimeException()
 
     @Suppress("LongParameterList") // Native prewrite fields and optional 1PC bounds.
     private fun prewrite(
@@ -121,7 +124,7 @@ internal class AtomicCommit(
         primary: ByteString,
         start: Long,
         lockTtl: Long,
-        onePhase: OnePhaseBounds?,
+        bounds: Lazy<OnePhaseBounds>?,
     ): Long {
         var committed = 0L
         val blindFences = values.asSequence().filter { (key, value) -> value != null && MetadataFences.isFence(key) }
@@ -137,6 +140,8 @@ internal class AtomicCommit(
                 // Preserve lock order even when a metadata change also reads other metadata.
                 // Only constant fence writes skip committed-version checks; live locks remain
                 // checked.
+                val onePhase = if (group.size == mutations.size) bounds?.value else null
+                if (onePhase != null && onePhase.minimum > onePhase.maximum) throw ExpiredBeforePrewrite()
                 committed = prewriter.send(
                     region, budget, primary, group.map(mutations::getValue),
                     start, lockTtl, blind, mutations.size, onePhase,
