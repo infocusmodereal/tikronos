@@ -1,5 +1,6 @@
 package tikronos
 
+import kotlinx.coroutines.sync.Semaphore
 import tikronos.protocol.Signature
 
 import io.ktor.server.application.ApplicationCallPipeline
@@ -70,7 +71,8 @@ fun main(args: Array<String>) {
     val maintenance = Maintenance(storage)
     val workers = Executors.newFixedThreadPool(limits.storageWorkers)
     val dispatcher = workers.asCoroutineDispatcher()
-    val api = HttpApi(Dynamo(storage, signature), dispatcher, limits)
+    val executions = Semaphore(limits.storageWorkers)
+    val api = HttpApi(Dynamo(storage, signature, executions), dispatcher, limits, executions)
     val server = embeddedServer(Netty, configure = {
         connector { host = bind.hostString; port = bind.port }
         connectionGroupSize = 1
@@ -132,14 +134,26 @@ private fun closeResources(
 ) {
     workers.shutdown()
     try {
-        if (!workers.awaitTermination(DRAIN_MS, TimeUnit.MILLISECONDS)) workers.shutdownNow()
+        if (!workers.awaitTermination(DRAIN_MS, TimeUnit.MILLISECONDS)) {
+            workers.shutdownNow()
+            workers.awaitTermination(DRAIN_MS, TimeUnit.MILLISECONDS)
+        }
     } finally {
-        try {
-            maintenance.close()
-        } finally {
-            dispatcher.close()
-            cleanup.close()
-            try { storage.close() } finally { session.close() }
+        fun release() {
+            try {
+                maintenance.close()
+            } finally {
+                dispatcher.close()
+                cleanup.close()
+                try { storage.close() } finally { session.close() }
+            }
+        }
+        if (workers.isTerminated) release() else {
+            java.util.logging.Logger.getLogger("tikronos").warning("Storage drain timed out; deferring session close")
+            Thread.ofPlatform().daemon().name("storage-drain").start {
+                workers.close()
+                release()
+            }
         }
     }
 }

@@ -17,6 +17,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
@@ -31,9 +32,9 @@ internal class HttpApi(
     private val api: Dynamo,
     private val storage: CoroutineDispatcher,
     private val limits: HttpLimits,
+    private val executions: Semaphore,
 ) {
     private val slots = Semaphore(limits.maxRequests)
-    private val executions = Semaphore(limits.storageWorkers)
     private val bodies = RequestBodies()
     @Volatile private var draining = false
 
@@ -107,7 +108,10 @@ internal class HttpApi(
                 event?.rejection = "queue"
                 throw throttled()
             }
-            withContext(storage) { RequestEvents.within(event) { api.handle(input) } }
+            withContext(storage) {
+                val context = coroutineContext
+                RequestEvents.within(event) { api.handle(input, context::ensureActive) }
+            }
         } finally {
             if (acquired) executions.release()
         }

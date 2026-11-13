@@ -115,7 +115,7 @@ prefetch. Query/Scan byte limits remain applied before filtering and projection.
 
 `GET /healthz` and `HEAD /healthz` report process liveness only. Use a signed read such as `ListTables` to verify storage access. A successful liveness response does not mean TiKV is ready.
 
-SIGTERM rejects new API requests, drains admitted requests for up to ten seconds, then stops the HTTP engine and storage resources. Give containers 60 seconds to stop, as the supplied Compose file does. A forced kill or lost connection can leave the result of a write unknown; reconcile state before blindly replaying mutations.
+SIGTERM rejects new API requests, drains admitted requests for up to ten seconds, then stops the HTTP engine. Cancellation stops a batch before its next pair. The service waits for started storage work before closing the TiKV session. Give containers 60 seconds to stop, as the supplied Compose file does. A forced kill or lost connection can leave the result of a write unknown; reconcile state before blindly replaying mutations.
 
 ## Request limits
 
@@ -170,6 +170,16 @@ shared batch's retries; interrupted callers without a delivered result record no
 The `tikronos.Timestamp` event records each batch's size, success, RPC-attempt count and summed
 `rpcNanos`, including retried exchanges. Its remaining duration includes retry backoff and local work.
 Commit time includes region lookup and retry waits; prewrite time covers the RPC exchange only. Keys, values and credentials are not recorded.
+Validated batch writes can use one spare storage slot for a second item transaction. With a
+single slot, full admission, an active stream, a building index or no cached write plan, the batch
+runs serially. Both started transactions finish before the next pair or the response. Only confirmed
+contention is returned as unprocessed. An unknown decision from either item takes precedence.
+
+The request event counts concurrent pairs in `batchPairs` and sums their storage work across both
+threads. Phase totals can exceed elapsed request time. The `tikronos.Maintenance` event measures
+one visit per maintenance family, including empty scans. The scheduler waits one second after all
+four visits finish.
+
 Without an active JFR recording, request events are not allocated.
 Rejection reasons distinguish `admission`, `queue`, `body_budget`, `draining`, `contention`
 and `unknown_outcome`. The latter is an ambiguous write result, not a safe rejection to replay.

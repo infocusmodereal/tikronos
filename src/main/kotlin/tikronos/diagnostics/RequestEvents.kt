@@ -31,6 +31,30 @@ internal object RequestEvents {
         }
     }
 
+    fun child(): RequestEvent? = current.get()?.let { RequestEvent() }
+
+    fun include(child: RequestEvent?) {
+        if (child == null) return
+        val parent = checkNotNull(current.get())
+        parent.batchPairs++
+        parent.timestampNanos += child.timestampNanos
+        parent.timestampAllocationNanos += child.timestampAllocationNanos
+        parent.prewriteNanos += child.prewriteNanos
+        parent.commitNanos += child.commitNanos
+        parent.catalogAcquireNanos += child.catalogAcquireNanos
+        parent.catalogDrainNanos += child.catalogDrainNanos
+        parent.catalogAcquisitions += child.catalogAcquisitions
+        parent.catalogDrains += child.catalogDrains
+        parent.catalogFallbackGets += child.catalogFallbackGets
+        parent.catalogLoaderBusy += child.catalogLoaderBusy
+        parent.timestamps += child.timestamps
+        parent.prewrites += child.prewrites
+        parent.commits += child.commits
+        parent.onePhaseAttempts += child.onePhaseAttempts
+        parent.onePhaseCommits += child.onePhaseCommits
+        parent.onePhaseFallbacks += child.onePhaseFallbacks
+    }
+
     fun start(): Long = if (current.get() == null) 0 else System.nanoTime()
 
     fun timestamp(start: Long, allocationNanos: Long) {
