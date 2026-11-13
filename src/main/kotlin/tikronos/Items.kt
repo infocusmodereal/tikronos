@@ -44,7 +44,7 @@ internal class Items(private val db: Storage, private val tables: Tables) {
         val item = db.read(snapshot, table.address(key))?.let(Records::item)
         return obj().apply {
             if (item != null)
-                set<ObjectNode>("Item", json.valueToTree(wireItem(project(item, paths))))
+                set<ObjectNode>("Item", wireItem(project(item, paths)))
             capacity.add(this, table.name, readUnits(itemSize(item.orEmpty()), strong))
         }
     }
@@ -133,7 +133,7 @@ internal class Items(private val db: Storage, private val tables: Tables) {
                 if (returns.startsWith("UPDATED")) project(state, actions.map(Action::path))
                 else state
             if (result.isNotEmpty())
-                set<ObjectNode>("Attributes", json.valueToTree(wireItem(result)))
+                set<ObjectNode>("Attributes", wireItem(result))
         }
     }
 

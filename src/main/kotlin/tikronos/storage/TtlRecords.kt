@@ -1,5 +1,6 @@
 package tikronos.storage
 
+import com.fasterxml.jackson.databind.node.ObjectNode
 import tikronos.codec.parseItem
 import tikronos.codec.wireItem
 import tikronos.json
@@ -31,8 +32,9 @@ internal object TtlRecords {
 
     fun encode(candidate: ExpiryCandidate): ByteArray = json.writeValueAsBytes(obj(
         "tableName" to candidate.tableName, "tableId" to candidate.tableId,
-        "generation" to candidate.generation, "expiry" to candidate.expiry,
-        "key" to wireItem(candidate.key)))
+        "generation" to candidate.generation, "expiry" to candidate.expiry).apply {
+            set<ObjectNode>("key", wireItem(candidate.key))
+        })
 
     fun candidate(bytes: ByteArray): ExpiryCandidate {
         val n = json.readTree(bytes)

@@ -59,21 +59,19 @@ internal class Reads(private val db: Storage, private val tables: Tables) {
         val page = collect(if (fetch) snapshot.baseItems(table, rows) else rows, limit, target, fetch)
         val included = page.items.filter { filter?.matches(it) != false }
         return obj("Count" to included.size, "ScannedCount" to page.items.size).apply {
-            if (!countOnly)
-                set<ObjectNode>(
-                    "Items",
-                    json.valueToTree(included.map {
-                        val visible = it.projectedTo(available)
-                        wireItem(project(visible, projection))
-                    }),
-                )
+            if (!countOnly) writeItems(included, available, projection)
             if (page.more)
                 set<ObjectNode>(
                     "LastEvaluatedKey",
-                    json.valueToTree(wireItem(target.key(page.items.last()))),
+                    wireItem(target.key(page.items.last())),
                 )
             capacity.add(this, table.name, target.capacity(page.bytes, page.fetchedBytes, strong))
         }
+    }
+
+    private fun ObjectNode.writeItems(items: List<Item>, available: Set<String>?, projection: List<Path>?) {
+        val array = putArray("Items")
+        items.forEach { item -> array.add(wireItem(project(item.projectedTo(available), projection))) }
     }
 
     private fun validateQueryFilter(filter: tikronos.expression.Predicate?, table: Table) {

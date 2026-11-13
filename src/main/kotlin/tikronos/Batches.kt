@@ -50,9 +50,9 @@ internal class Batches(private val db: Storage, private val tables: Tables, priv
                 val projected = item?.let { wireItem(project(it, group.paths)) }
                 val cost = projected?.let { json.writeValueAsBytes(it).size + 1 } ?: 0
                 if (used + bytes > PAGE_BYTES || cost > remaining) {
-                    pending.add(json.valueToTree<ObjectNode>(wireItem(key)))
+                    pending.add(wireItem(key))
                 } else {
-                    if (projected != null) result.add(json.valueToTree<ObjectNode>(projected))
+                    if (projected != null) result.add(projected)
                     remaining -= cost
                     partitions[partition] = used + bytes
                     units.merge(group.table.name, readUnits(bytes, group.strong), Double::plus)
@@ -66,8 +66,10 @@ internal class Batches(private val db: Storage, private val tables: Tables, priv
                     group.request.deepCopy().apply { set<ObjectNode>("Keys", pending) },
                 )
         }
-        return obj("Responses" to responses, "UnprocessedKeys" to unprocessed).also {
-            capacity.batch(it, units)
+        return obj().apply {
+            set<ObjectNode>("Responses", responses)
+            set<ObjectNode>("UnprocessedKeys", unprocessed)
+            capacity.batch(this, units)
         }
     }
 

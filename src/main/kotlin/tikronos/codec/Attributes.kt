@@ -8,22 +8,32 @@ import tikronos.model.Item
 import tikronos.model.MAX_DEPTH
 import tikronos.model.Value
 import tikronos.model.attributeName
-import tikronos.obj
+import tikronos.json
+import com.fasterxml.jackson.databind.node.ObjectNode
 
-internal fun Value.wire(): JsonNode =
-    obj(
-        type to
-            when (this) {
-                is Value.Text -> value
-                is Value.Number -> value.toPlainString()
-                is Value.Binary -> base64
-                is Value.Bool -> value
-                Value.Null -> true
-                is Value.Document -> wireItem(fields)
-                is Value.Sequence -> values.map(Value::wire)
-                is Value.Members -> values.map { it.wire()[it.type].textValue() }.sorted()
-            }
-    )
+internal fun wireItem(item: Item): ObjectNode = json.createObjectNode().apply {
+    item.forEach { (name, value) -> set<ObjectNode>(name, value.wire()) }
+}
+
+internal fun Value.wire(): ObjectNode = json.createObjectNode().also { node ->
+    when (this) {
+        is Value.Text, is Value.Number, is Value.Binary -> node.put(type, scalarText())
+        is Value.Bool -> node.put(type, value)
+        Value.Null -> node.put(type, true)
+        is Value.Document -> node.set<ObjectNode>(type, wireItem(fields))
+        is Value.Sequence -> node.putArray(type).also { array -> values.forEach { array.add(it.wire()) } }
+        is Value.Members -> node.putArray(type).also { array ->
+            values.map { it.scalarText() }.sorted().forEach(array::add)
+        }
+    }
+}
+
+private fun Value.scalarText(): String = when (this) {
+    is Value.Text -> value
+    is Value.Number -> value.toPlainString()
+    is Value.Binary -> base64
+    else -> error("Expected a string, number or binary value")
+}
 
 internal fun parseValue(node: JsonNode, depth: Int = 0): Value {
     if (!node.isObject || node.size() != 1) invalid("Invalid attribute value")
@@ -90,7 +100,5 @@ internal fun parseItem(node: JsonNode, depth: Int = 0): Item {
         attributeName(name) to parseValue(value, depth)
     }
 }
-
-internal fun wireItem(item: Item) = item.mapValues { it.value.wire() }
 
 private const val MAX_NUMERIC_TEXT = 4096

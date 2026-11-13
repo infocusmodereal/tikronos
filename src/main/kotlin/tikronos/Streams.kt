@@ -87,18 +87,20 @@ internal class Streams(private val db: Storage) {
         val size = itemSize(keys) + (if (includeOld) itemSize(old.orEmpty()) else 0) +
             (if (includeNew) itemSize(new.orEmpty()) else 0)
         val data = obj("ApproximateCreationDateTime" to timestampSeconds(sequence),
-            "Keys" to wireItem(keys), "SequenceNumber" to StreamRecords.sequence(sequence),
+            "SequenceNumber" to StreamRecords.sequence(sequence),
             "StreamViewType" to state.view, "SizeBytes" to size)
+        data.set<ObjectNode>("Keys", wireItem(keys))
         if (old != null && includeOld)
-            data.set<ObjectNode>("OldImage", json.valueToTree(wireItem(old)))
+            data.set<ObjectNode>("OldImage", wireItem(old))
         if (new != null && includeNew)
-            data.set<ObjectNode>("NewImage", json.valueToTree(wireItem(new)))
+            data.set<ObjectNode>("NewImage", wireItem(new))
         return obj("eventID" to "${state.label}:$sequence", "eventName" to when {
             old == null -> "INSERT"
             new == null -> "REMOVE"
             else -> "MODIFY"
         }, "eventVersion" to "1.1", "eventSource" to "aws:dynamodb",
-            "awsRegion" to state.arn.split(':')[REGION_PART], "dynamodb" to data).apply {
+            "awsRegion" to state.arn.split(':')[REGION_PART]).apply {
+                set<ObjectNode>("dynamodb", data)
                 if (ttl) set<ObjectNode>("userIdentity",
                     obj("Type" to "Service", "PrincipalId" to "dynamodb.amazonaws.com"))
             }

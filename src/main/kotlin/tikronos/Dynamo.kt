@@ -44,7 +44,7 @@ internal class Dynamo(db: Storage, private val signature: Signature?, executions
                             "message" to "Condition failed",
                         )
                         .apply {
-                            e.old?.let { set<ObjectNode>("Item", json.valueToTree(wireItem(it))) }
+                            e.old?.let { set<ObjectNode>("Item", wireItem(it)) }
                         }
             } catch (_: ContentionLimitExceeded) {
                 RequestEvents.rejection("contention")
