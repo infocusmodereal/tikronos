@@ -23,6 +23,13 @@ def exercise():
         head.sendall(b"HEAD /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         wire_headers, _, wire_body = head.makefile("rb").read().partition(b"\r\n\r\n")
         assert wire_headers.startswith(b"HTTP/1.1 200") and wire_body == b""
+    discovery = {**headers, "X-Amz-Target": "DynamoDB_20120810.DescribeEndpoints",
+                 "X-Forwarded-Host": "internal.invalid"}
+    for host, expected in (("public.example:8443", 200), ("", 400)):
+        status, _, body = request("POST", "/", b"{}", {**discovery, "Host": host})
+        assert status == expected
+        if status == 200:
+            assert json.loads(body)["Endpoints"][0]["Address"] == host
     assert request("POST", "/healthz")[0] == 405
     assert request("GET", "/")[0] == 405
     for path in ("/%2f", "//", "/other"):

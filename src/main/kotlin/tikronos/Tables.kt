@@ -133,7 +133,7 @@ internal class Tables(private val db: Storage) {
         private const val MAX_TABLES = 100
         private val validName = Regex("[a-zA-Z0-9_.-]{3,255}")
 
-        private fun checkedName(name: String) =
+        fun checkedName(name: String) =
             name.takeIf(validName::matches) ?: invalid("Invalid table name")
 
         fun tableName(req: ObjectNode) = checkedName(req.string("TableName"))
