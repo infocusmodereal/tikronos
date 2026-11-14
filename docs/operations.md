@@ -55,6 +55,11 @@ page. Concurrent workers use native write conflicts; an aborted batch cannot adv
 Checkpoint writes do not rewrite semantic metadata, drain catalog leases or fan out metadata
 fences. Activation and policy changes still do.
 
+A malformed stored primary row leaves the index in `CREATING` at the last committed checkpoint.
+The worker logs the table and failure on retry. After the row is repaired, another worker can
+resume there. Existing rows with an incompatible secondary key are skipped during backfill.
+New writes containing an incompatible index key fail validation.
+
 When a separate checkpoint is absent, workers resume the embedded cursor in older records. That
 embedded cursor remains a legacy seed, not a live progress report. New policy generations and
 recreated tables/indexes use independent keys. Dropping a table or index queues its immutable row prefix in the DDL

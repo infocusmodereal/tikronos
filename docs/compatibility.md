@@ -29,7 +29,7 @@ Streams expose one shard per stream, four image modes, authenticated 15-minute i
 ## Known differences and gaps
 
 - Expression handling differs for parenthesized operands. Nested `list_append` is rejected. An update that only removes attributes from a missing item leaves it absent.
-- Tags are returned in a single page (up to 50). Supplying `NextToken` is unsupported. A table ARN identifies the current table of that name, including after recreation.
+- Table tags are returned in a single page (up to 50). TiKronos checks key and value lengths but does not enforce the AWS character allowlist or aggregate tag byte limit. Supplying `NextToken` is unsupported. A table ARN identifies the current table of that name, including after recreation.
 - `DescribeEndpoints` returns the HTTP Host authority. A reverse proxy must preserve the public Host header for discovery. A missing or blank Host fails validation.
 - Stream replicas use their local clocks to expire iterators. Keep replica clocks synchronized.
 - Some Query/Scan cursor validation and error wording differ, including HASH-only Query with `ExclusiveStartKey`.

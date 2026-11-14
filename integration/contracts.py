@@ -76,6 +76,15 @@ def exercise():
         assert competing.count("ValidationException") == 1
         attr = next(r["TimeToLiveSpecification"]["AttributeName"] for r in competing if isinstance(r, dict))
         assert request("DescribeTimeToLive", **table)["TimeToLiveDescription"]["AttributeName"] == attr
+        policy = {**table, "TimeToLiveSpecification": dict(Enabled=False, AttributeName=attr)}
+        replacement = {**table, "TimeToLiveSpecification": dict(Enabled=True, AttributeName="later")}
+        disabled, enabled = race("UpdateTimeToLive", policy, replacement)
+        assert isinstance(disabled, dict)
+        current = request("DescribeTimeToLive", **table)["TimeToLiveDescription"]
+        if isinstance(enabled, dict):
+            assert current == dict(TimeToLiveStatus="ENABLED", AttributeName="later")
+        else:
+            assert enabled == "ValidationException" and current["TimeToLiveStatus"] == "DISABLED"
         request("DeleteTable", **table)
         assert outcome("DescribeContinuousBackups", **table) == "TableNotFoundException"
         request("CreateTable", **definitions[0 if pk == "sk" else 1])
