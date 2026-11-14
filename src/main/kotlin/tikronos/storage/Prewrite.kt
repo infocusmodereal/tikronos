@@ -62,7 +62,12 @@ internal class Prewrite(
             }
             val response = sendRequest(TikvGrpc.newBlockingStub(channel)
                 .withDeadlineAfter(remaining, TimeUnit.NANOSECONDS), request, locked)
-            if (response.hasRegionError()) throw RegionException(response.regionError)
+            if (response.hasRegionError()) {
+                val error = RegionException(response.regionError)
+                // Repartitioning an already attempted multi-key decision could replay it as partial 2PC.
+                if (onePhase != null && transactionSize > 1) throw CommitUnknown(error)
+                throw error
+            }
             if (response.errorsCount == 0) return committed(response.onePcCommitTs, onePhase)
             val locks = response.errorsList.map {
                 if (!it.hasLocked()) throw KeyException(it)
@@ -97,10 +102,8 @@ internal class Prewrite(
     private fun validateOnePhase(
         primary: ByteString, mutations: List<Kvrpcpb.Mutation>, blind: Boolean, size: Int,
     ) {
-        require(!blind && size == 1 && mutations.size == 1)
-        require(mutations.single().key == primary)
-        val operation = mutations.single().op
-        require(operation == Kvrpcpb.Op.Put || operation == Kvrpcpb.Op.Del)
+        require(!blind && mutations.size == size && mutations.any { it.key == primary })
+        require(mutations.all { it.op == Kvrpcpb.Op.Put || it.op == Kvrpcpb.Op.Del })
     }
 
     @Suppress("TooGenericExceptionCaught", "ThrowsCount") // Any failed 1PC exchange may have committed.
