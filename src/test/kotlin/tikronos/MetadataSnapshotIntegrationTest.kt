@@ -37,7 +37,8 @@ class MetadataSnapshotIntegrationTest {
                 assertNotEquals(original.string("TableId"), latest.string("TableId"))
                 assertEquals(original, Tables(reader).describe(name, before))
                 val projected = obj("TableName" to name, "Key" to key, "ProjectionExpression" to "note")
-                assertEquals(obj("Item" to obj("note" to item["note"])), Items(reader, Tables(reader)).get(projected, before))
+                val result = Items(reader, Tables(reader)).get(projected, before)
+                assertEquals(obj("Item" to obj("note" to item["note"])), result)
                 val ttl = Ttl(reader)
                 assertEquals(obj("TimeToLiveStatus" to "ENABLED", "AttributeName" to "expires"),
                     ttl.describe(name, before).obj("TimeToLiveDescription"))
