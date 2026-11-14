@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+import contracts
 import indexes
 import items
 import lifecycle
@@ -62,6 +63,7 @@ def main():
         lock.main()
         transport.exercise()
         items.exercise()
+        contracts.exercise()
         indexes.exercise(restart=server.restart)
         lifecycle.exercise()
         transport.drain(server.process)

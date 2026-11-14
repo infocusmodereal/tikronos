@@ -4,12 +4,16 @@ import com.fasterxml.jackson.databind.node.ObjectNode
 import tikronos.model.Table
 import tikronos.storage.Records
 import tikronos.storage.Storage
+import tikronos.storage.table
 
 internal class Catalog(private val db: Storage) {
     private val tables = Tables(db)
     fun backups(req: ObjectNode): ObjectNode {
         req.fieldsOnly("TableName")
-        tables.find(Tables.tableName(req))
+        val resource = req.string("TableName")
+        val name = if (resource.startsWith("arn:")) nameFromArn(resource) else Tables.checkedName(resource)
+        if (db.catalog.table(db.snapshot(), name) == null)
+            throw ApiError("TableNotFoundException", "Table $name does not exist")
         return obj("ContinuousBackupsDescription" to obj(
             "ContinuousBackupsStatus" to "DISABLED",
             "PointInTimeRecoveryDescription" to obj("PointInTimeRecoveryStatus" to "DISABLED")))
@@ -21,10 +25,7 @@ internal class Catalog(private val db: Storage) {
             "UntagResource" -> "TagKeys"
             else -> "NextToken"
         })
-        val arn = req.string("ResourceArn")
-        val name = arn.substringAfter(":table/", "")
-        val table = tables.find(name)
-        if (arn != tableArn(table)) invalid("Invalid ResourceArn")
+        val table = tables.find(nameFromArn(req.string("ResourceArn")))
         if (operation == "ListTagsOfResource") {
             if (req.has("NextToken")) invalid("Invalid NextToken")
             return obj("Tags" to table.tags.toSortedMap().map { obj("Key" to it.key, "Value" to it.value) })
@@ -49,10 +50,21 @@ internal class Catalog(private val db: Storage) {
     }
 }
 
+private fun nameFromArn(arn: String): String {
+    val name = Tables.checkedName(arn.substringAfter(":table/", ""))
+    if (arn != tableArn(name)) invalid("Invalid table ARN")
+    return name
+}
+
+private fun tagKey(key: String): String {
+    if (key.codePointCount(0, key.length) !in 1..MAX_TAG_KEY || key.startsWith("aws:")) invalid("Invalid tag key")
+    return key
+}
+
 private fun tagKeys(req: ObjectNode): Set<String> {
     val keys = req.path("TagKeys")
     if (!keys.isArray || keys.isEmpty || keys.size() > MAX_TAGS) invalid("Invalid TagKeys")
-    return keys.map { if (!it.isTextual) invalid("Invalid tag key") else it.textValue() }.toSet()
+    return keys.map { tagKey(it.textValue() ?: invalid("Invalid tag key")) }.toSet()
 }
 
 internal fun parseTags(req: ObjectNode): Map<String, String> {
@@ -60,9 +72,9 @@ internal fun parseTags(req: ObjectNode): Map<String, String> {
     if (!nodes.isArray || nodes.size() > MAX_TAGS) invalid("Invalid Tags")
     val result = nodes.associate {
         it.fieldsOnly("Key", "Value")
-        val key = it.string("Key")
+        val key = tagKey(it.string("Key"))
         val value = it.string("Value")
-        if (key.length !in 1..MAX_TAG_KEY || value.length > MAX_TAG_VALUE || key.startsWith("aws:"))
+        if (value.codePointCount(0, value.length) > MAX_TAG_VALUE)
             invalid("Invalid tag")
         key to value
     }
