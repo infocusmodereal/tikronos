@@ -18,7 +18,7 @@ Partition and optional sort keys accept strings, numbers or binary values. Attri
 
 Query and Scan return up to 1 MiB before filtering, with a snapshot per request. Queries support forward and reverse traversal. Parallel Scan assigns disjoint key ranges. Use returned pagination keys; pages are separate requests, not a snapshot of the whole traversal.
 
-Both batch operations accept up to 100 entries. `BatchWriteItem` therefore differs from AWS's 25-operation limit. Retry only returned `UnprocessedKeys` or `UnprocessedItems` with backoff. Client-side SDK validation may impose AWS limits before sending a request.
+BatchGetItem accepts up to 100 keys. BatchWriteItem accepts up to 25 writes across all tables. Split larger batches before submitting them. Retry returned `UnprocessedKeys` or `UnprocessedItems` with backoff. BatchWriteItem rejects `ReturnItemCollectionMetrics=SIZE` before writing because item collection size estimates are unavailable.
 
 ## Indexes, TTL and streams
 
@@ -28,7 +28,10 @@ Streams expose one shard per stream, four image modes, authenticated 15-minute i
 
 ## Known differences and gaps
 
-- Expression handling differs for redundant parentheses and nested `list_append`.
+- Expression handling differs for parenthesized operands. Nested `list_append` is rejected. An update that only removes attributes from a missing item leaves it absent.
+- Table tags are returned in a single page (up to 50). TiKronos checks key and value lengths but does not enforce the AWS character allowlist or aggregate tag byte limit. Supplying `NextToken` is unsupported. A table ARN identifies the current table of that name, including after recreation.
+- `DescribeEndpoints` returns the HTTP Host authority. A reverse proxy must preserve the public Host header for discovery. A missing or blank Host fails validation.
+- Stream replicas use their local clocks to expire iterators. Keep replica clocks synchronized.
 - Some Query/Scan cursor validation and error wording differ, including HASH-only Query with `ExclusiveStartKey`.
 - Provisioned capacity is reported but not enforced. Backup status is DISABLED; no backup/restore API is implemented.
 - Transaction APIs, global tables and PartiQL are not implemented.

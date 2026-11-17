@@ -1,6 +1,7 @@
 package tikronos
 
 import com.fasterxml.jackson.databind.node.ObjectNode
+import org.tikv.common.Snapshot
 import tikronos.codec.parseItem
 import tikronos.codec.wireItem
 import tikronos.expression.Action
@@ -23,7 +24,7 @@ import tikronos.storage.key
 internal class Items(private val db: Storage, private val tables: Tables) {
     private val writer = ItemWriter(db)
 
-    fun get(req: ObjectNode): ObjectNode {
+    fun get(req: ObjectNode, snapshot: Snapshot = db.snapshot()): ObjectNode {
         req.fieldsOnly(
             "TableName",
             "Key",
@@ -33,7 +34,6 @@ internal class Items(private val db: Storage, private val tables: Tables) {
             "AttributesToGet",
             "ReturnConsumedCapacity",
         )
-        val snapshot = db.snapshot()
         val table = tables.find(Tables.tableName(req), snapshot)
         val key = table.key(parseItem(req.obj("Key")))
         val expressions = RequestExpressions(req)

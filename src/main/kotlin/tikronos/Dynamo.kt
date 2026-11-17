@@ -121,7 +121,9 @@ internal class Dynamo(db: Storage, private val signature: Signature?, executions
                         listOf(
                             obj(
                                 "CachePeriodInMinutes" to CACHE_MINUTES,
-                            ).apply { put("Address", input.headers.first("Host")) }
+                                "Address" to (input.headers.first("Host")?.takeIf { it.isNotBlank() }
+                                    ?: invalid("Host is required for endpoint discovery")),
+                            )
                         )
                 )
             }

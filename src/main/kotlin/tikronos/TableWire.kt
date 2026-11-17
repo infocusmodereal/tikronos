@@ -107,7 +107,10 @@ internal fun description(table: Table, stream: StreamState?) =
 private const val MAX_KEY_NAME_BYTES = 255
 
 internal fun tableArn(table: Table): String =
-    "arn:aws:dynamodb:${System.getenv("TIKRONOS_REGION") ?: "us-east-1"}:000000000000:table/${table.name}"
+    tableArn(table.name)
+
+internal fun tableArn(name: String): String =
+    "arn:aws:dynamodb:${System.getenv("TIKRONOS_REGION") ?: "us-east-1"}:000000000000:table/$name"
 
 internal fun definitions(table: Table): Map<String, String> = buildMap {
     put(table.partitionKey, table.partitionType)

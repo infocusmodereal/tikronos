@@ -135,6 +135,8 @@ internal class Parser(source: String, private val env: Bindings, private val fie
                 else -> invalid("Syntax error: function $fn not allowed here")
             }
         expect(")")
+        if (args.any { it is Operand.Function && it.name == "list_append" })
+            invalid("list_append cannot be used as a function argument")
         return Operand.Function(fn, args)
     }
 

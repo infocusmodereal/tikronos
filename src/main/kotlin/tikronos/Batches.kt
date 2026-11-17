@@ -104,9 +104,9 @@ internal class Batches(private val db: Storage, private val tables: Tables, priv
         req.fieldsOnly("RequestItems", "ReturnConsumedCapacity", "ReturnItemCollectionMetrics")
         if (
             req.has("ReturnItemCollectionMetrics") &&
-                req.string("ReturnItemCollectionMetrics") !in setOf("NONE", "SIZE")
+                req.string("ReturnItemCollectionMetrics") != "NONE"
         ) {
-            invalid("Invalid ReturnItemCollectionMetrics")
+            invalid("Only NONE is supported for ReturnItemCollectionMetrics")
         }
         val capacity = Capacity(req)
         val snapshot = db.snapshot()
@@ -174,4 +174,4 @@ internal class Batches(private val db: Storage, private val tables: Tables, priv
 }
 
 private const val MAX_BATCH_GET = 100
-private const val MAX_BATCH_WRITE = 100
+private const val MAX_BATCH_WRITE = 25

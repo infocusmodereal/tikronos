@@ -207,6 +207,18 @@ class StreamTtlIntegrationTest {
         val horizon = reads.iterator(obj("StreamArn" to arn, "ShardId" to state.shard,
             "ShardIteratorType" to "TRIM_HORIZON")).string("ShardIterator")
         assertEquals(1, reads.records(obj("ShardIterator" to horizon)).path("Records").size())
+        val sequence = state.head
+        for ((mode, count) in listOf("AT_SEQUENCE_NUMBER" to 1, "AFTER_SEQUENCE_NUMBER" to 0)) {
+            val iterator = reads.iterator(obj("StreamArn" to arn, "ShardId" to state.shard,
+                "ShardIteratorType" to mode, "SequenceNumber" to StreamRecords.sequence(sequence)))
+            assertEquals(count, reads.records(iterator).path("Records").size())
+        }
+        val clock = Instant.now().epochSecond
+        val tokens = StreamTokens(db)
+        val position = StreamPosition(arn, sequence, clock)
+        val boundary = tokens.encode(position)
+        assertEquals(position, tokens.decode(boundary, clock - 1))
+        assertEquals("ExpiredIteratorException", assertFailsWith<ApiError> { tokens.decode(boundary, clock) }.code)
         val old = StreamTokens(db).encode(StreamPosition(arn, 0, Instant.now().epochSecond + FUTURE_SECONDS))
         assertEquals("TrimmedDataAccessException", assertFailsWith<ApiError> {
             reads.records(obj("ShardIterator" to old))

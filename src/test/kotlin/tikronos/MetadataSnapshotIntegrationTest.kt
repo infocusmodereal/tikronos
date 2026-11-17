@@ -22,6 +22,9 @@ class MetadataSnapshotIntegrationTest {
         try {
             Ttl(db).update(obj("TableName" to name, "TimeToLiveSpecification" to
                 obj("AttributeName" to "expires", "Enabled" to true)))
+            val key = obj("pk" to obj("S" to "row"))
+            val item = obj("pk" to key["pk"], "note" to obj("S" to "original"))
+            Items(db, tables).write(obj("TableName" to name, "Item" to item), "PutItem")
             Storage(session).use { reader ->
                 val before = reader.snapshot()
                 val deleted = tables.delete(request).obj("TableDescription")
@@ -33,6 +36,9 @@ class MetadataSnapshotIntegrationTest {
                 assertEquals(replacement, latest)
                 assertNotEquals(original.string("TableId"), latest.string("TableId"))
                 assertEquals(original, Tables(reader).describe(name, before))
+                val projected = obj("TableName" to name, "Key" to key, "ProjectionExpression" to "note")
+                val result = Items(reader, Tables(reader)).get(projected, before)
+                assertEquals(obj("Item" to obj("note" to item["note"])), result)
                 val ttl = Ttl(reader)
                 assertEquals(obj("TimeToLiveStatus" to "ENABLED", "AttributeName" to "expires"),
                     ttl.describe(name, before).obj("TimeToLiveDescription"))
