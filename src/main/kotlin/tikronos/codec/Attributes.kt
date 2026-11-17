@@ -86,7 +86,8 @@ private fun scalar(type: String, data: JsonNode): Value {
         "B" ->
             try {
                 val decoded = Base64.getDecoder().decode(value)
-                Value.Binary(Base64.getEncoder().encodeToString(decoded), decoded.size)
+                val canonical = if (canonicalPadding(value)) value else Base64.getEncoder().encodeToString(decoded)
+                Value.Binary(canonical, decoded.size)
             } catch (_: IllegalArgumentException) {
                 invalid("Invalid base64")
             }
@@ -102,3 +103,16 @@ internal fun parseItem(node: JsonNode, depth: Int = 0): Item {
 }
 
 private const val MAX_NUMERIC_TEXT = 4096
+
+// The JDK decoder already validated the alphabet and padding placement.
+// Only missing padding or nonzero unused bits can differ on re-encoding.
+private fun canonicalPadding(value: String): Boolean {
+    if (!value.endsWith('=')) return value.length % BASE64_QUANTUM == 0
+    val padding = if (value.endsWith("==")) 2 else 1
+    val digit = BASE64_ALPHABET.indexOf(value[value.lastIndex - padding])
+    val unusedBits = padding * 2
+    return digit and ((1 shl unusedBits) - 1) == 0
+}
+
+private const val BASE64_QUANTUM = 4
+private const val BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

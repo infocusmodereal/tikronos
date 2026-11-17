@@ -65,7 +65,7 @@ internal class HttpApi(
             .distinct().associateWith { call.request.headers.getAll(it).orEmpty() })
         val event = RequestEvents.begin(headers.first("X-Amz-Target"))
         try {
-            bodies.validateLength(call.request.headers[HttpHeaders.ContentLength])
+            val bufferSize = bodies.bufferSize(call.request.headers[HttpHeaders.ContentLength])
             val signature = api.validateHeaders(headers)
             if (draining) {
                 event?.rejection = "draining"
@@ -76,7 +76,7 @@ internal class HttpApi(
                 throw throttled()
             }
             try {
-                bodies.consume(call.receiveChannel()) { body ->
+                bodies.consume(call.receiveChannel(), bufferSize) { body ->
                     respond(call, execute(DynamoRequest(headers, body, hasQuery, signature), event))
                 }
             } finally {
