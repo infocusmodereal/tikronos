@@ -24,11 +24,12 @@ class RequestAdmissionTest {
 
     @Test
     fun `a timed out waiter leaves the active slot with its owner`() = runBlocking {
-        val admission = RequestAdmission(1, 1)
+        val admission = RequestAdmission(1, 1, waitMs = 250)
         assertTrue(admission.acquire())
         assertFalse(admission.acquire())
+        val next = async(start = CoroutineStart.UNDISPATCHED) { admission.acquire() }
         admission.release()
-        assertTrue(admission.acquire())
+        assertTrue(next.await())
         admission.release()
     }
 }
