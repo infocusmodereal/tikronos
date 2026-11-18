@@ -20,7 +20,6 @@ import java.util.UUID
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import tikronos.config.HttpLimits
 import tikronos.protocol.DynamoRequest
@@ -95,25 +94,16 @@ internal class HttpApi(
     private suspend fun execute(
         input: DynamoRequest, event: RequestEvent?,
     ): DynamoResponse {
-        var acquired = false
-        return try {
-            val queued = if (event == null) 0 else System.nanoTime()
-            val ready = withTimeoutOrNull(QUEUE_TIMEOUT_MS) {
-                executions.acquire()
-                acquired = true
-                true
-            }
+        val queued = if (event == null) 0 else System.nanoTime()
+        return withStoragePermit(executions, storage, QUEUE_TIMEOUT_MS, onAdmitted = {
             event?.queueNanos = System.nanoTime() - queued
-            if (ready != true) {
-                event?.rejection = "queue"
-                throw throttled()
-            }
-            withContext(storage) {
-                val context = coroutineContext
-                RequestEvents.within(event) { api.handle(input, context::ensureActive) }
-            }
-        } finally {
-            if (acquired) executions.release()
+        }) {
+            val context = coroutineContext
+            RequestEvents.within(event) { api.handle(input, context::ensureActive) }
+        } ?: run {
+            event?.queueNanos = System.nanoTime() - queued
+            event?.rejection = "queue"
+            throw throttled()
         }
     }
 
