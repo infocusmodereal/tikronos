@@ -9,17 +9,18 @@ import kotlinx.coroutines.withTimeout
 /** Charge actual chunks and their final copy, never an untrusted declared length. */
 internal class RequestBodies(private val budget: BodyBudget = BodyBudget(BUFFER_BYTES)) {
 
-    fun validateLength(value: String?) {
+    fun bufferSize(value: String?): Int {
         val length = value?.toLongOrNull()
         if (length != null && length > Dynamo.MAX_BODY) tooLarge()
+        return length?.coerceIn(1, CHUNK_BYTES.toLong())?.toInt() ?: CHUNK_BYTES
     }
 
-    suspend fun <T> consume(input: ByteReadChannel, block: suspend (ByteArray) -> T): T {
+    suspend fun <T> consume(input: ByteReadChannel, bufferSize: Int = CHUNK_BYTES, block: suspend (ByteArray) -> T): T {
         var reserved = 0
         try {
             val bytes = try {
                 withTimeout(TOTAL_TIMEOUT_MS) {
-                    read(input) { count ->
+                    read(input, bufferSize) { count ->
                         budget.reserve(count)
                         reserved += count
                     }
@@ -33,8 +34,8 @@ internal class RequestBodies(private val budget: BodyBudget = BodyBudget(BUFFER_
         }
     }
 
-    private suspend fun read(input: ByteReadChannel, reserve: (Int) -> Unit): ByteArray {
-        val buffer = ByteArray(CHUNK_BYTES)
+    private suspend fun read(input: ByteReadChannel, bufferSize: Int, reserve: (Int) -> Unit): ByteArray {
+        var buffer = ByteArray(bufferSize)
         val chunks = mutableListOf<ByteArray>()
         var size = 0
         var filled = 0
@@ -48,10 +49,12 @@ internal class RequestBodies(private val budget: BodyBudget = BodyBudget(BUFFER_
             filled += count
             if (filled == buffer.size) {
                 reserve(filled)
-                chunks += buffer.copyOf()
+                chunks += buffer
+                buffer = ByteArray(if (size == bufferSize && bufferSize < CHUNK_BYTES) 1 else CHUNK_BYTES)
                 filled = 0
             }
         }
+        if (filled == 0 && chunks.size == 1) return chunks.single()
         if (filled > 0) {
             reserve(filled)
             chunks += buffer.copyOf(filled)

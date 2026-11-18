@@ -45,7 +45,7 @@ internal class Items(private val db: Storage, private val tables: Tables) {
         return obj().apply {
             if (item != null)
                 set<ObjectNode>("Item", wireItem(project(item, paths)))
-            capacity.add(this, table.name, readUnits(itemSize(item.orEmpty()), strong))
+            if (capacity.requested) capacity.add(this, table.name, readUnits(itemSize(item.orEmpty()), strong))
         }
     }
 

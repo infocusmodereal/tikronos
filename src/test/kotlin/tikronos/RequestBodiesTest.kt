@@ -19,8 +19,14 @@ import kotlin.test.assertFalse
 
 class RequestBodiesTest {
     @Test
+    fun `a short length hint preserves the entire multi-chunk body`() = runBlocking {
+        val data = ByteArray(20_000) { (it % 251).toByte() }
+        RequestBodies().consume(ByteReadChannel(data), bufferSize = 32) { assertContentEquals(data, it) }
+    }
+
+    @Test
     fun `real bytes exhaust budget until cancellation releases the request`() = runBlocking {
-        val capacity = 2 * 8192
+        val capacity = 8192
         val budget = BodyBudget(capacity)
         val bodies = RequestBodies(budget)
         val data = ByteArray(8192) { (it % 251).toByte() }
