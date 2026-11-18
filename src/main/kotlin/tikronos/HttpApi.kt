@@ -20,6 +20,7 @@ import java.util.UUID
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import tikronos.config.HttpLimits
 import tikronos.protocol.DynamoRequest
@@ -33,13 +34,13 @@ internal class HttpApi(
     private val limits: HttpLimits,
     private val executions: Semaphore,
 ) {
-    private val slots = Semaphore(limits.maxRequests)
+    private val slots = RequestAdmission(limits.maxRequests, limits.storageWorkers)
     private val bodies = RequestBodies()
     @Volatile private var draining = false
 
     suspend fun drain(timeoutMs: Long) {
         draining = true
-        withTimeoutOrNull(timeoutMs) { repeat(limits.maxRequests) { slots.acquire() } }
+        withTimeoutOrNull(timeoutMs) { repeat(limits.maxRequests) { slots.acquireForDrain() } }
     }
 
     suspend fun handle(call: ApplicationCall) {
@@ -66,15 +67,13 @@ internal class HttpApi(
         try {
             val bufferSize = bodies.bufferSize(call.request.headers[HttpHeaders.ContentLength])
             val signature = api.validateHeaders(headers)
-            if (draining) {
-                event?.rejection = "draining"
-                throw throttled()
-            }
-            if (!slots.tryAcquire()) {
+            checkServing(event)
+            if (!slots.acquire()) {
                 event?.rejection = "admission"
                 throw throttled()
             }
             try {
+                checkServing(event)
                 bodies.consume(call.receiveChannel(), bufferSize) { body ->
                     respond(call, execute(DynamoRequest(headers, body, hasQuery, signature), event))
                 }
@@ -94,15 +93,31 @@ internal class HttpApi(
     private suspend fun execute(
         input: DynamoRequest, event: RequestEvent?,
     ): DynamoResponse {
-        val queued = if (event == null) 0 else System.nanoTime()
-        return withStoragePermit(executions, storage, QUEUE_TIMEOUT_MS, onAdmitted = {
+        var acquired = false
+        return try {
+            val queued = if (event == null) 0 else System.nanoTime()
+            val ready = withTimeoutOrNull(QUEUE_TIMEOUT_MS) {
+                executions.acquire()
+                acquired = true
+                true
+            }
             event?.queueNanos = System.nanoTime() - queued
-        }) {
-            val context = coroutineContext
-            RequestEvents.within(event) { api.handle(input, context::ensureActive) }
-        } ?: run {
-            event?.queueNanos = System.nanoTime() - queued
-            event?.rejection = "queue"
+            if (ready != true) {
+                event?.rejection = "queue"
+                throw throttled()
+            }
+            withContext(storage) {
+                val context = coroutineContext
+                RequestEvents.within(event) { api.handle(input, context::ensureActive) }
+            }
+        } finally {
+            if (acquired) executions.release()
+        }
+    }
+
+    private fun checkServing(event: RequestEvent?) {
+        if (draining) {
+            event?.rejection = "draining"
             throw throttled()
         }
     }
