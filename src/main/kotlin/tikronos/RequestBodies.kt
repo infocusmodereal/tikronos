@@ -70,7 +70,7 @@ internal class RequestBodies(private val budget: BodyBudget = BodyBudget(BUFFER_
 
     private suspend fun readChunk(input: ByteReadChannel, buffer: ByteArray, offset: Int): Int {
         // This is the only reader. Buffered bytes and end-of-stream need no idle timer.
-        return if (input.availableForRead > 0 || input.isClosedForRead) {
+        return if (input.isClosedForRead || input.availableForRead > 0) {
             input.readAvailable(buffer, offset, buffer.size - offset)
         } else {
             withTimeout(IDLE_TIMEOUT_MS) { input.readAvailable(buffer, offset, buffer.size - offset) }
