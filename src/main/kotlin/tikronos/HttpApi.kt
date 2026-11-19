@@ -34,13 +34,13 @@ internal class HttpApi(
     private val limits: HttpLimits,
     private val executions: Semaphore,
 ) {
-    private val slots = RequestAdmission(limits.maxRequests, limits.storageWorkers)
+    private val slots = Semaphore(limits.maxRequests)
     private val bodies = RequestBodies()
     @Volatile private var draining = false
 
     suspend fun drain(timeoutMs: Long) {
         draining = true
-        withTimeoutOrNull(timeoutMs) { repeat(limits.maxRequests) { slots.acquireForDrain() } }
+        withTimeoutOrNull(timeoutMs) { repeat(limits.maxRequests) { slots.acquire() } }
     }
 
     suspend fun handle(call: ApplicationCall) {
@@ -67,13 +67,15 @@ internal class HttpApi(
         try {
             val bufferSize = bodies.bufferSize(call.request.headers[HttpHeaders.ContentLength])
             val signature = api.validateHeaders(headers)
-            checkServing(event)
-            if (!slots.acquire()) {
+            if (draining) {
+                event?.rejection = "draining"
+                throw throttled()
+            }
+            if (!slots.tryAcquire()) {
                 event?.rejection = "admission"
                 throw throttled()
             }
             try {
-                checkServing(event)
                 bodies.consume(call.receiveChannel(), bufferSize) { body ->
                     respond(call, execute(DynamoRequest(headers, body, hasQuery, signature), event))
                 }
@@ -113,13 +115,6 @@ internal class HttpApi(
             }
         } finally {
             if (acquired) executions.release()
-        }
-    }
-
-    private fun checkServing(event: RequestEvent?) {
-        if (draining) {
-            event?.rejection = "draining"
-            throw throttled()
         }
     }
 
