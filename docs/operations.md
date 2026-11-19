@@ -127,7 +127,7 @@ SIGTERM rejects new API requests, drains admitted requests for up to ten seconds
 | Limit per API process | Value |
 | --- | --- |
 | Admitted requests | Twice the storage worker count by default |
-| Waiting for HTTP admission before body reads | Up to one waiter per storage worker for up to 8 ms |
+| Waiting for HTTP admission before body reads | Up to one waiter per storage worker for up to 2 ms |
 | Concurrent blocking storage calls | 8 per available CPU, capped at 128 by default |
 | Storage-worker queue wait | 5 seconds |
 | Maximum request body | 16 MiB |

@@ -32,5 +32,5 @@ internal class RequestAdmission(maxRequests: Int, maxWaiters: Int, private val w
     fun release() = slots.release()
     suspend fun acquireForDrain() = slots.acquire()
 
-    companion object { private const val BURST_WAIT_MS = 8L }
+    companion object { private const val BURST_WAIT_MS = 2L }
 }
