@@ -98,13 +98,14 @@ internal class HttpApi(
         var acquired = false
         return try {
             val queued = if (event == null) 0 else System.nanoTime()
-            val ready = withTimeoutOrNull(QUEUE_TIMEOUT_MS) {
+            acquired = executions.tryAcquire()
+            val ready = acquired || withTimeoutOrNull(QUEUE_TIMEOUT_MS) {
                 executions.acquire()
                 acquired = true
                 true
-            }
+            } == true
             event?.queueNanos = System.nanoTime() - queued
-            if (ready != true) {
+            if (!ready) {
                 event?.rejection = "queue"
                 throw throttled()
             }
