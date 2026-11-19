@@ -4,6 +4,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.availableForRead
 import io.ktor.utils.io.readAvailable
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
@@ -71,6 +73,7 @@ internal class RequestBodies(private val budget: BodyBudget = BodyBudget(BUFFER_
     private suspend fun readChunk(input: ByteReadChannel, buffer: ByteArray, offset: Int): Int {
         // This is the only reader. Buffered bytes and end-of-stream need no idle timer.
         return if (input.isClosedForRead || input.availableForRead > 0) {
+            coroutineContext.ensureActive()
             input.readAvailable(buffer, offset, buffer.size - offset)
         } else {
             withTimeout(IDLE_TIMEOUT_MS) { input.readAvailable(buffer, offset, buffer.size - offset) }
